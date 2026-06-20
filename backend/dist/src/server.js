@@ -20,6 +20,7 @@ const rateLimiter_1 = require("./services/rateLimiter");
 const bullmqService_1 = require("./services/bullmqService");
 const cryptoService_1 = require("./services/cryptoService");
 const firebaseAdmin_1 = require("./config/firebaseAdmin");
+const grievanceValidator_1 = require("./services/grievanceValidator");
 // Load environment variables
 dotenv_1.default.config({ path: path_1.default.join(__dirname, '../frontend/.env') });
 const app = (0, express_1.default)();
@@ -309,6 +310,21 @@ app.get('/api/complaints/track/:token', publicTrackRateLimiter, async (req, res)
     catch (error) {
         console.error(`[API Server] Error fetching tracking data for token ${token}:`, error.message);
         return res.status(500).json({ error: error.message || 'An error occurred.' });
+    }
+});
+// 6. AI Validation Endpoint (Called by frontend)
+app.post('/api/validate-grievance', async (req, res) => {
+    try {
+        const { image, title, description, category, district } = req.body;
+        if (!image) {
+            return res.status(400).json({ error: 'Image is required for validation.' });
+        }
+        const result = await (0, grievanceValidator_1.validateGrievance)(image, title, description, category, district);
+        return res.status(200).json(result);
+    }
+    catch (error) {
+        console.error('[API Server] AI Validation Error:', error.message);
+        return res.status(500).json({ error: error.message || 'An error occurred during AI validation.' });
     }
 });
 // 6. Diagnostics Endpoint: Health check for Render deployments

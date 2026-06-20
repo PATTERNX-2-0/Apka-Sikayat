@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 import { FileText, AlertCircle, CheckCircle2, Clock, ArrowRight, Plus, Eye } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
 
 export default function CitizenDashboardOverview() {
   const { user, profile } = useAuth();
@@ -20,9 +20,19 @@ export default function CitizenDashboardOverview() {
         const q = query(collection(db, "complaints"), where("uid", "==", user.uid));
         const querySnapshot = await getDocs(q);
         const list: any[] = [];
-        querySnapshot.forEach((doc) => {
-          list.push(doc.data());
-        });
+        const mockIds = ["CMP-1008", "CMP-1007", "CMP-1006", "CMP-1005", "CMP-1004", "CMP-1003", "CMP-1002", "CMP-1001"];
+        
+        for (const docSnap of querySnapshot.docs) {
+          if (mockIds.includes(docSnap.id)) {
+            try {
+              await deleteDoc(docSnap.ref);
+            } catch (err) {
+              console.error("Failed to delete mock document:", docSnap.id, err);
+            }
+          } else {
+            list.push(docSnap.data());
+          }
+        }
         
         // Sort by date/createdAt descending
         list.sort((a, b) => {

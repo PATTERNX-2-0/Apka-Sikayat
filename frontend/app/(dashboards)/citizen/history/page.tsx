@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, doc, setDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 // Mock Data for History - used for seeding
 const MOCK_HISTORY = [
@@ -41,9 +41,19 @@ export default function ComplaintHistoryPage() {
         const q = query(collection(db, "complaints"), where("uid", "==", user.uid));
         const querySnapshot = await getDocs(q);
         const fetchedList: any[] = [];
-        querySnapshot.forEach((doc) => {
-          fetchedList.push(doc.data());
-        });
+        const mockIds = ["CMP-1008", "CMP-1007", "CMP-1006", "CMP-1005", "CMP-1004", "CMP-1003", "CMP-1002", "CMP-1001"];
+        
+        for (const docSnap of querySnapshot.docs) {
+          if (mockIds.includes(docSnap.id)) {
+            try {
+              await deleteDoc(docSnap.ref);
+            } catch (err) {
+              console.error("Failed to delete mock document:", docSnap.id, err);
+            }
+          } else {
+            fetchedList.push(docSnap.data());
+          }
+        }
 
         setComplaints(fetchedList);
       } catch (error) {
