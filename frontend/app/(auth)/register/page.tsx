@@ -2,14 +2,19 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { motion } from 'framer-motion';
-import { User, Mail, Lock, Phone, ArrowRight, ShieldCheck } from 'lucide-react';
+import { User, Mail, Lock, Phone, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
 import { registerSchema, RegisterFormValues } from '@/lib/validations/auth';
+import { useAuth } from '@/context/AuthContext';
 
 export default function RegisterPage() {
+  const router = useRouter();
+  const { signUp } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const { register, handleSubmit, formState: { errors } } = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
@@ -17,10 +22,21 @@ export default function RegisterPage() {
 
   const onSubmit = async (data: RegisterFormValues) => {
     setIsLoading(true);
-    setTimeout(() => {
-      console.log("Registering citizen:", data);
+    setErrorMsg(null);
+    try {
+      await signUp(data.email, data.password, data.fullName, data.phone);
+      router.push('/citizen');
+    } catch (err: any) {
+      console.error("Registration error:", err);
+      if (err.code === "auth/email-already-in-use") {
+        setErrorMsg("This email address is already in use.");
+      } else if (err.code === "auth/weak-password") {
+        setErrorMsg("The password is too weak.");
+      } else {
+        setErrorMsg(err.message || "Failed to create account. Please try again.");
+      }
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (
@@ -37,6 +53,13 @@ export default function RegisterPage() {
         <h1 className="text-2xl font-bold text-[#1E3A8A]">Citizen Registration</h1>
         <p className="text-sm text-gray-500 mt-2">Join Apka Sikayat to make your voice heard.</p>
       </div>
+
+      {errorMsg && (
+        <div className="mb-6 p-4 bg-[#EF4444]/10 border border-[#EF4444]/20 text-[#EF4444] text-sm rounded-xl flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div>

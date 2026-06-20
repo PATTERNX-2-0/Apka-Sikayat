@@ -2,22 +2,37 @@
 
 import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
+import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { motion } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import { 
   FileText, MapPin, UploadCloud, Camera, Video, 
-  Mic, ShieldAlert, ArrowRight, EyeOff, File
+  Mic, ShieldAlert, ArrowRight, EyeOff, File,
+  Brain, Loader2, CheckCircle2, AlertTriangle
 } from 'lucide-react';
 import { complaintSchema, ComplaintFormValues, CATEGORIES, DISTRICTS } from '@/lib/validations/complaint';
+import * as firebaseModule from '@/lib/firebase';
+import { useAuth } from '@/context/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 
 // Dynamically import the map to prevent Next.js SSR errors
 const LocationPicker = dynamic(() => import('@/components/maps/LocationPicker'), { ssr: false });
 
 export default function SubmitComplaintPage() {
+  console.log("[Submit Page] Imported firebaseModule:", firebaseModule);
+  console.log("[Submit Page] db is:", db);
+  const { user, profile } = useAuth();
+  const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
+  
+  // AI Validation States
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiAnalysisResult, setAiAnalysisResult] = useState<any>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm<ComplaintFormValues>({
     resolver: zodResolver(complaintSchema),
@@ -26,27 +41,185 @@ export default function SubmitComplaintPage() {
 
   const isAnonymous = watch('isAnonymous');
 
+  const validateImage = async (file: File): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64Data = reader.result as string;
+        try {
+          setIsAnalyzing(true);
+          setAiError(null);
+          setAiAnalysisResult(null);
+
+          const currentValues = watch();
+
+          const response = await fetch("/api/validate-grievance", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              image: base64Data,
+              title: currentValues.title,
+              description: currentValues.description,
+              category: currentValues.category,
+              district: currentValues.district
+            })
+          });
+
+          if (!response.ok) {
+            const errBody = await response.json();
+            throw new Error(errBody.error || "Failed to validate image.");
+          }
+
+          const result = await response.json();
+          if (result.accepted && result.is_grievance) {
+            setAiAnalysisResult(result);
+            
+            // Auto-fill form fields
+            if (result.grievance_category) {
+              const matchedCategory = CATEGORIES.find(
+                cat => cat.toLowerCase().replace(/[^a-z]/g, "") === result.grievance_category.toLowerCase().replace(/[^a-z]/g, "")
+              );
+              if (matchedCategory) {
+                setValue("category", matchedCategory);
+              } else {
+                setValue("category", "Other");
+              }
+            }
+            if (result.severity) {
+              const severityUpper = result.severity.toUpperCase();
+              if (["LOW", "MEDIUM", "HIGH", "CRITICAL"].includes(severityUpper)) {
+                setValue("priority", severityUpper as any);
+              }
+            }
+            resolve(true);
+          } else {
+            setAiError(result.reason || "This image does not represent a valid public grievance.");
+            resolve(false);
+          }
+        } catch (error: any) {
+          console.error("AI Validation Error:", error);
+          setAiError(error.message || "Failed to connect to AI validation service.");
+          resolve(false);
+        } finally {
+          setIsAnalyzing(false);
+        }
+      };
+      reader.onerror = () => {
+        setAiError("Failed to read image file.");
+        resolve(false);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   // Drag and Drop configuration
   const { getRootProps, getInputProps } = useDropzone({
     accept: { 'image/*': [], 'video/*': [], 'audio/*': [] },
-    onDrop: (acceptedFiles) => setFiles((prev) => [...prev, ...acceptedFiles])
+    onDrop: async (acceptedFiles) => {
+      const validatedFiles: File[] = [];
+      for (const file of acceptedFiles) {
+        if (file.type.startsWith("image/")) {
+          const isValid = await validateImage(file);
+          if (isValid) {
+            validatedFiles.push(file);
+          }
+        } else {
+          // Non-images (audio/video) are accepted directly as before
+          validatedFiles.push(file);
+        }
+      }
+      if (validatedFiles.length > 0) {
+        setFiles((prev) => [...prev, ...validatedFiles]);
+      }
+    }
   });
 
   const onSubmit = async (data: ComplaintFormValues) => {
+    if (!user) {
+      alert("You must be logged in to submit a complaint.");
+      return;
+    }
+
     setIsSubmitting(true);
-    // Mock API Call
-    console.log("Submitting:", { ...data, files });
-    setTimeout(() => {
-      alert("Complaint Submitted Successfully!");
+    try {
+      const randomId = Math.floor(1000 + Math.random() * 9000);
+      const complaintId = `CMP-${randomId}`;
+
+      const docRef = doc(db, "complaints", complaintId);
+
+      const newComplaint = {
+        id: complaintId,
+        uid: user.uid,
+        title: data.title,
+        description: data.description,
+        category: data.category,
+        priority: data.priority,
+        district: data.district,
+        location: {
+          lat: data.location.lat,
+          lng: data.location.lng,
+          address: data.location.address || `${data.district}, Delhi`
+        },
+        isAnonymous: data.isAnonymous || false,
+        status: "Pending",
+        createdAt: new Date().toISOString(),
+        date: new Date().toISOString().split('T')[0],
+        assignedOfficer: "Pending Assignment",
+        timeline: [
+          { step: 1, title: "Complaint Submitted", date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }), desc: "Your complaint was received by the system.", iconName: "FileText" },
+          { step: 2, title: "Assigned to Department", date: null, desc: "Awaiting routing to department.", iconName: "UserCheck" },
+          { step: 3, title: "In Progress", date: null, desc: "Team will work on resolution at the site.", iconName: "Wrench" },
+          { step: 4, title: "Pending Verification", date: null, desc: "Awaiting field evidence and supervisor approval.", iconName: "ShieldCheck" },
+          { step: 5, title: "Resolved", date: null, desc: "Issue has been fixed.", iconName: "CheckCircle2" },
+          { step: 6, title: "Closed", date: null, desc: "Complaint officially closed.", iconName: "Lock" },
+        ],
+        currentStep: 1,
+        aiValidation: aiAnalysisResult || null
+      };
+
+      await setDoc(docRef, newComplaint);
+
+      // Trigger Twilio SMS alert and database logger on the backend
+      try {
+        await fetch(`http://localhost:5002/api/complaints/${complaintId}/status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            status: 'Submitted',
+            notes: 'Dear Citizen, Your grievance has been successfully submitted and is under AI validation.',
+            updatedBy: 'Citizen',
+            phoneNumber: profile?.phone || '',
+            citizenId: user?.uid || ''
+          })
+        });
+      } catch (smsError) {
+        console.error("Failed to trigger backend SMS service:", smsError);
+      }
+
+      alert(`Complaint Submitted Successfully! ID: ${complaintId}`);
+      router.push('/citizen/history');
+    } catch (error) {
+      console.error("Error submitting complaint:", error);
+      alert("Failed to submit complaint. Please try again.");
+    } finally {
       setIsSubmitting(false);
-    }, 1500);
+    }
   };
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-5xl mx-auto">
       
       <div className="mb-8">
-        <h1 className="text-2xl sm:text-3xl font-bold text-[#1E3A8A]">File a New Complaint</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-[#1E3A8A] flex items-center gap-3">
+          File a New Complaint
+          <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full border border-blue-200">
+            <Brain className="w-3.5 h-3.5" /> AI Guarded
+          </span>
+        </h1>
         <p className="text-sm text-gray-500 mt-1">Please provide detailed information to help us resolve the issue quickly.</p>
       </div>
 
@@ -144,6 +317,28 @@ export default function SubmitComplaintPage() {
               <p className="text-xs text-gray-400 mt-1">or click to browse (Photos, Videos, Audio)</p>
             </div>
 
+            {/* AI Engine Status Banners */}
+            {isAnalyzing && (
+              <div className="mt-4 p-4 rounded-xl border border-[#87CEEB]/30 bg-[#87CEEB]/5 flex items-center justify-center space-x-3 text-[#1E3A8A] text-sm animate-pulse">
+                <Loader2 className="w-5 h-5 animate-spin text-[#FF9933]" />
+                <span className="font-medium">AI Intelligence Engine validating image...</span>
+              </div>
+            )}
+
+            {aiError && (
+              <div className="mt-4 p-4 rounded-xl border border-red-100 bg-red-50/50 text-red-700 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                <span className="font-semibold text-red-800">Evidence rejected. Please upload a valid image showing a public grievance.</span>
+              </div>
+            )}
+
+            {aiAnalysisResult && (
+              <div className="mt-4 p-4 rounded-xl border border-emerald-100 bg-emerald-50/50 text-emerald-800 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                <span className="font-semibold text-emerald-950">Evidence verified and accepted.</span>
+              </div>
+            )}
+
             {/* Display selected files */}
             {files.length > 0 && (
               <div className="mt-4 space-y-2">
@@ -178,7 +373,7 @@ export default function SubmitComplaintPage() {
 
             <button 
               type="submit" 
-              disabled={isSubmitting}
+              disabled={isSubmitting || isAnalyzing}
               className="w-full flex justify-center items-center py-3.5 px-4 rounded-xl text-[#1E3A8A] bg-white hover:bg-gray-50 font-bold transition-all disabled:opacity-70 shadow-lg"
             >
               {isSubmitting ? "Processing..." : "Submit Grievance"} 

@@ -2,12 +2,15 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation'; // Added useRouter import
+import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { motion } from 'framer-motion';
-import { Mail, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Mail, Lock, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
 import { loginSchema, LoginFormValues } from '@/lib/validations/auth';
+import { useAuth } from '@/context/AuthContext';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 // Demo Credentials for quick access during presentation
 const DEMO_ACCOUNTS = [
@@ -18,8 +21,10 @@ const DEMO_ACCOUNTS = [
 ];
 
 export default function LoginPage() {
-  const router = useRouter(); // Initialized the router
+  const router = useRouter();
+  const { signIn } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const { register, handleSubmit, setValue, formState: { errors } } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -27,24 +32,48 @@ export default function LoginPage() {
 
   const onSubmit = async (data: LoginFormValues) => {
     setIsLoading(true);
-    // Mock authentication delay
-    setTimeout(() => {
-      console.log("Logging in with:", data);
-      setIsLoading(false);
+    setErrorMsg(null);
+    try {
+      const user = await signIn(data.email, data.password);
       
-      // Routing Logic added here
-      if (data.email === 'citizen@demo.com' || data.email.includes('citizen')) {
+      let role = 'Citizen';
+      try {
+        const userDocRef = doc(db, "users", user.uid);
+        const userDoc = await getDoc(userDocRef);
+        if (userDoc.exists()) {
+          role = userDoc.data().role || 'Citizen';
+        }
+      } catch (dbErr) {
+        console.error("Error reading role from Firestore, using email fallbacks:", dbErr);
+        if (data.email === 'officer@demo.com') {
+          role = 'Officer';
+        } else if (data.email === 'dept@demo.com') {
+          role = 'Dept Head';
+        } else if (data.email === 'cm@demo.com') {
+          role = 'CM Office';
+        }
+      }
+      
+      if (role === 'Citizen') {
         router.push('/citizen');
-      } else if (data.email === 'officer@demo.com') {
-        router.push('/officer'); 
-      } else if (data.email === 'dept@demo.com') {
-        router.push('/department'); // Added Department routing
-      } else if (data.email === 'cm@demo.com') {
+      } else if (role === 'Officer') {
+        router.push('/officer');
+      } else if (role === 'Dept Head') {
+        router.push('/department');
+      } else if (role === 'CM Office') {
         router.push('/cm');
       } else {
         router.push('/citizen');
       }
-    }, 1000);
+    } catch (err: any) {
+      console.error("Login error:", err);
+      if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
+        setErrorMsg("Invalid email or password.");
+      } else {
+        setErrorMsg(err.message || "Failed to sign in. Please try again.");
+      }
+      setIsLoading(false);
+    }
   };
 
   const loadDemoUser = (email: string) => {
@@ -66,6 +95,13 @@ export default function LoginPage() {
         <h1 className="text-2xl font-bold text-[#1E3A8A]">Apka Sikayat</h1>
         <p className="text-sm text-gray-500 mt-2">Welcome back. Please login to your account.</p>
       </div>
+
+      {errorMsg && (
+        <div className="mb-6 p-4 bg-[#EF4444]/10 border border-[#EF4444]/20 text-[#EF4444] text-sm rounded-xl flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
         <div>

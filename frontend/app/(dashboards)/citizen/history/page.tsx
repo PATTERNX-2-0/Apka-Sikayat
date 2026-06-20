@@ -1,32 +1,91 @@
 "use client";
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Search, Filter, ArrowUpDown, ChevronLeft, ChevronRight, 
   FileText, CheckCircle2, Clock, AlertCircle, Eye, MapPin, Calendar
 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { db } from '@/lib/firebase';
+import { collection, query, where, getDocs, doc, setDoc } from 'firebase/firestore';
 
-// Mock Data for History
+// Mock Data for History - used for seeding
 const MOCK_HISTORY = [
-  { id: "CMP-1008", title: "Pothole on Main Arterial Road", category: "Roads & Traffic", status: "Resolved", date: "2026-10-25", district: "South Delhi" },
-  { id: "CMP-1007", title: "No Water Supply for 2 Days", category: "Water Supply", status: "In Progress", date: "2026-10-24", district: "West Delhi" },
-  { id: "CMP-1006", title: "Garbage Dump Overflowing", category: "Sanitation", status: "Pending", date: "2026-10-22", district: "East Delhi" },
-  { id: "CMP-1005", title: "Streetlights not working", category: "Electricity", status: "Closed", date: "2026-10-18", district: "Central Delhi" },
-  { id: "CMP-1004", title: "Illegal Parking in Residential Area", category: "Law & Order", status: "Escalated", date: "2026-10-15", district: "South West Delhi" },
-  { id: "CMP-1003", title: "Sewer Line Blockage", category: "Sanitation", status: "Resolved", date: "2026-10-10", district: "North Delhi" },
-  { id: "CMP-1002", title: "Frequent Power Cuts", category: "Electricity", status: "Closed", date: "2026-09-28", district: "East Delhi" },
-  { id: "CMP-1001", title: "Stray Dog Menace", category: "Public Health", status: "Closed", date: "2026-09-15", district: "South Delhi" },
+  { id: "CMP-1008", title: "Pothole on Main Arterial Road", category: "Roads & Traffic", status: "Resolved", date: "2026-06-19", district: "South Delhi" },
+  { id: "CMP-1007", title: "No Water Supply for 2 Days", category: "Water Supply", status: "In Progress", date: "2026-06-18", district: "West Delhi" },
+  { id: "CMP-1006", title: "Garbage Dump Overflowing", category: "Sanitation & Waste", status: "Pending", date: "2026-06-17", district: "East Delhi" },
+  { id: "CMP-1005", title: "Streetlights not working", category: "Electricity", status: "Closed", date: "2026-06-15", district: "Central Delhi" },
+  { id: "CMP-1004", title: "Illegal Parking in Residential Area", category: "Law & Order", status: "Escalated", date: "2026-06-12", district: "South West Delhi" },
+  { id: "CMP-1003", title: "Sewer Line Blockage", category: "Sanitation & Waste", status: "Resolved", date: "2026-06-10", district: "North Delhi" },
+  { id: "CMP-1002", title: "Frequent Power Cuts", category: "Electricity", status: "Closed", date: "2026-06-08", district: "East Delhi" },
+  { id: "CMP-1001", title: "Stray Dog Menace", category: "Public Health", status: "Closed", date: "2026-06-05", district: "South Delhi" },
 ];
 
 const ITEMS_PER_PAGE = 5;
 
 export default function ComplaintHistoryPage() {
+  const { user } = useAuth();
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [sortBy, setSortBy] = useState("Newest");
   const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    const fetchAndSeedComplaints = async () => {
+      if (!user) return;
+      try {
+        const q = query(collection(db, "complaints"), where("uid", "==", user.uid));
+        const querySnapshot = await getDocs(q);
+        const fetchedList: any[] = [];
+        querySnapshot.forEach((doc) => {
+          fetchedList.push(doc.data());
+        });
+
+        if (fetchedList.length === 0) {
+          console.log("No complaints found in Firestore. Seeding default history...");
+          const seededList = MOCK_HISTORY.map((item, idx) => ({
+            ...item,
+            uid: user.uid,
+            createdAt: new Date(new Date(item.date).getTime()).toISOString(),
+            assignedOfficer: idx % 2 === 0 ? "Rahul Verma (JE - Delhi Jal Board)" : "Pending Assignment",
+            timeline: [
+              { step: 1, title: "Complaint Submitted", date: new Date(item.date).toLocaleDateString('en-IN'), desc: "Your complaint was received by the system.", iconName: "FileText" },
+              { step: 2, title: "Assigned to Department", date: new Date(item.date).toLocaleDateString('en-IN'), desc: "Officer assigned.", iconName: "UserCheck" },
+              { step: 3, title: "In Progress", date: item.status === "In Progress" || item.status === "Resolved" || item.status === "Closed" ? new Date(item.date).toLocaleDateString('en-IN') : null, desc: "Team working on resolution.", iconName: "Wrench" },
+              { step: 4, title: "Pending Verification", date: item.status === "Resolved" || item.status === "Closed" ? new Date(item.date).toLocaleDateString('en-IN') : null, desc: "Awaiting field verification.", iconName: "ShieldCheck" },
+              { step: 5, title: "Resolved", date: item.status === "Resolved" || item.status === "Closed" ? new Date(item.date).toLocaleDateString('en-IN') : null, desc: "Issue fixed.", iconName: "CheckCircle2" },
+              { step: 6, title: "Closed", date: item.status === "Closed" ? new Date(item.date).toLocaleDateString('en-IN') : null, desc: "Closed.", iconName: "Lock" },
+            ],
+            currentStep: item.status === "Pending" ? 1 : item.status === "In Progress" ? 3 : item.status === "Resolved" ? 5 : item.status === "Closed" ? 6 : 4,
+            location: {
+              lat: 28.5276,
+              lng: 77.2184,
+              address: `${item.district}, Delhi`
+            },
+            description: `Auto-seeded mock data for ${item.title}. This represents a detailed description of the reported complaint in ${item.district}.`,
+            isAnonymous: false
+          }));
+
+          for (const item of seededList) {
+            await setDoc(doc(db, "complaints", item.id), item);
+          }
+          setComplaints(seededList);
+        } else {
+          setComplaints(fetchedList);
+        }
+      } catch (error) {
+        console.error("Error fetching complaints:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAndSeedComplaints();
+  }, [user]);
 
   // Status Badge Styling Helper
   const getStatusConfig = (status: string) => {
@@ -42,7 +101,7 @@ export default function ComplaintHistoryPage() {
 
   // Filter and Sort Logic
   const filteredAndSortedData = useMemo(() => {
-    let result = MOCK_HISTORY;
+    let result = [...complaints];
 
     // 1. Search
     if (searchTerm) {
@@ -77,6 +136,14 @@ export default function ComplaintHistoryPage() {
 
   // Reset to page 1 when filters change
   React.useEffect(() => { setCurrentPage(1); }, [searchTerm, statusFilter, sortBy]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center bg-transparent">
+        <div className="w-8 h-8 border-4 border-[#1E3A8A] border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-6xl mx-auto space-y-6">

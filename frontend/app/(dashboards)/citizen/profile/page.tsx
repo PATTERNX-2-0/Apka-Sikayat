@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '@/context/AuthContext';
 import { motion } from 'framer-motion';
 import { User, Mail, Phone, MapPin, Edit2, ShieldCheck, Save, X } from 'lucide-react';
 
@@ -28,20 +29,47 @@ const MOCK_PROFILE: UserProfile = {
 };
 
 export default function ProfilePage() {
-  const [profile, setProfile] = useState<UserProfile>(MOCK_PROFILE);
+  const { profile, updateProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
-  const [formData, setFormData] = useState<UserProfile>(MOCK_PROFILE);
+  const [formData, setFormData] = useState({
+    fullName: "",
+    phone: "",
+    district: "",
+    address: ""
+  });
   const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (profile) {
+      setFormData({
+        fullName: profile.fullName || "",
+        phone: profile.phone || "",
+        district: profile.district || "",
+        address: profile.address || ""
+      });
+    }
+  }, [profile]);
 
   const handleSave = async () => {
     setIsSaving(true);
-    // API TODO: await axios.put('/api/users/profile', formData);
-    setTimeout(() => {
-      setProfile(formData);
+    try {
+      await updateProfile(formData);
       setIsEditing(false);
+    } catch (error) {
+      console.error("Error saving profile:", error);
+      alert("Failed to update profile. Please try again.");
+    } finally {
       setIsSaving(false);
-    }, 1000);
+    }
   };
+
+  if (!profile) {
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center bg-transparent">
+        <div className="w-8 h-8 border-4 border-[#1E3A8A] border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-4xl mx-auto space-y-6">
@@ -95,7 +123,17 @@ export default function ProfilePage() {
                 <button onClick={handleSave} disabled={isSaving} className="px-6 py-2.5 bg-[#FF9933] text-white font-medium rounded-xl hover:bg-opacity-90 transition flex items-center">
                   {isSaving ? "Saving..." : <><Save className="w-4 h-4 mr-2" /> Save Changes</>}
                 </button>
-                <button onClick={() => { setIsEditing(false); setFormData(profile); }} className="px-6 py-2.5 bg-gray-100 text-gray-600 font-medium rounded-xl hover:bg-gray-200 transition flex items-center">
+                <button onClick={() => { 
+                  setIsEditing(false); 
+                  if (profile) {
+                    setFormData({
+                      fullName: profile.fullName || "",
+                      phone: profile.phone || "",
+                      district: profile.district || "",
+                      address: profile.address || ""
+                    });
+                  }
+                }} className="px-6 py-2.5 bg-gray-100 text-gray-600 font-medium rounded-xl hover:bg-gray-200 transition flex items-center">
                   <X className="w-4 h-4 mr-2" /> Cancel
                 </button>
               </div>
