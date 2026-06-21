@@ -1,11 +1,29 @@
 import PDFDocument from 'pdfkit';
+import path from 'path';
+import fs from 'fs';
+
+// Try multiple relative paths or absolute path from backend root to locate Ashok Stambh logo
+let logoPath = '';
+const pathsToTry = [
+  path.join(__dirname, '../assets/ashok_stambh_logo.png'), // src/services/ -> src/assets/
+  path.join(__dirname, '../../../src/assets/ashok_stambh_logo.png'), // dist/src/services/ -> src/assets/
+  path.join(process.cwd(), 'src/assets/ashok_stambh_logo.png'), // backend root -> src/assets/
+  path.join(process.cwd(), 'backend/src/assets/ashok_stambh_logo.png') // repo root -> backend/src/assets/
+];
+
+for (const p of pathsToTry) {
+  if (fs.existsSync(p)) {
+    logoPath = p;
+    break;
+  }
+}
 
 /**
  * Helper to convert PDF generation flow into a promise resolving to a Buffer
  */
 function createPDFBuffer(buildDoc: (doc: PDFKit.PDFDocument) => void): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ margins: { top: 50, bottom: 80, left: 50, right: 50 } });
     const chunks: Buffer[] = [];
 
     doc.on('data', (chunk) => chunks.push(chunk));
@@ -16,6 +34,7 @@ function createPDFBuffer(buildDoc: (doc: PDFKit.PDFDocument) => void): Promise<B
     doc.end();
   });
 }
+
 
 /**
  * Generate Visit Briefing PDF Report
@@ -145,9 +164,6 @@ export function generateCustomPDF(text: string, title: string): Promise<Buffer> 
 /**
  * Generate CM Executive Governance Report PDF (11 Sections)
  */
-/**
- * Generate CM Executive Governance Report PDF (11 Sections)
- */
 export function generateCMExecutiveReport(data: any): Promise<Buffer> {
   return createPDFBuffer((doc) => {
     const primaryColor = '#1E3A8A';
@@ -165,16 +181,82 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     const drawPageHeader = (pageTitle: string) => {
       doc.fillColor(primaryColor).fontSize(10).font('Helvetica-Bold').text(pageTitle, 50, 30);
       doc.strokeColor('#E5E7EB').lineWidth(1).moveTo(50, 45).lineTo(550, 45).stroke();
-      doc.y = 60; // Set y cursor to start content at 60
     };
+
+    // Register dynamic page creation header/footer to avoid fixed spacing breaks
+    doc.on('pageAdded', () => {
+      const savedBottom = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0; // Temporarily disable bottom margin to avoid infinite page break recursion
+
+      drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+      doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Confidential`, 50, 755, { align: 'center' });
+
+      doc.page.margins.bottom = savedBottom; // Restore bottom margin
+      doc.y = 65;
+    });
+
+    if (data.isComplaintsOnly) {
+      // --- PAGE 1: COVER PAGE ---
+      doc.fillColor(primaryColor).fontSize(24).font('Helvetica-Bold').text('Daily Grievance Ledger', { align: 'center' });
+      doc.moveDown(0.5);
+      
+      if (logoPath) {
+        doc.image(logoPath, 265, 110, { width: 70 });
+      } else {
+        doc.circle(300, 160, 35).fill(accentColor);
+        doc.fillColor('#FFFFFF').fontSize(11).font('Helvetica-Bold').text('GOVT', 260, 155, { width: 80, align: 'center' });
+      }
+      
+      doc.x = 50;
+      doc.y = 220;
+      
+      doc.fillColor(textColor).fontSize(13).font('Helvetica-Bold').text('Official Grievance Summary Ledger', { align: 'center' });
+      doc.moveDown(0.4);
+      doc.fontSize(10).font('Helvetica').text(
+        'Respected Chief Minister,\n\nThis document contains the official list of citizen complaints registered in the state system for the specified period. No automated analysis or recommendations are included in this ledger.',
+        { align: 'center', width: 512, lineGap: 3 }
+      );
+
+      doc.moveDown(1.5);
+      doc.fontSize(9).font('Helvetica-Bold').text(`Ledger Date: ${data.currentDate}`, { align: 'center' });
+      doc.text(`Total Registered Complaints: ${data.total}`, { align: 'center' });
+      doc.text('Generated For: Honourable Chief Minister', { align: 'center' });
+
+      const savedBottomCover = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0;
+      doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Confidential`, 50, 755, { align: 'center' });
+      doc.page.margins.bottom = savedBottomCover;
+
+      // --- PAGE 2: COMPLAINTS LIST ---
+      doc.addPage();
+      
+      doc.fillColor(primaryColor).fontSize(14).font('Helvetica-Bold').text('Registered Complaints List', 50, doc.y);
+      doc.moveDown(0.5);
+      
+      if (data.complaintsList && data.complaintsList.length > 0) {
+        data.complaintsList.forEach((c: any, index: number) => {
+          doc.fillColor(textColor).fontSize(10).font('Helvetica-Bold').text(`${index + 1}. ID: ${c.id || 'N/A'} - ${c.title || 'Untitled'}`, { lineGap: 2 });
+          doc.font('Helvetica').fontSize(9).text(`Description: ${c.description || 'N/A'}`, { indent: 15, lineGap: 2 });
+          doc.text(`District: ${c.district || 'General'} | Department: ${c.department || 'General'} | Status: ${c.status || 'Pending'} | Priority: ${c.priority || 'Normal'} | Date: ${c.createdAtStr || 'N/A'}`, { indent: 15, lineGap: 2 });
+          doc.moveDown(0.8);
+        });
+      } else {
+        doc.fillColor(textColor).fontSize(10).text('No complaints registered for this period.');
+      }
+      return;
+    }
 
     // --- PAGE 1: COVER PAGE & GREETINGS ---
     doc.fillColor(primaryColor).fontSize(24).font('Helvetica-Bold').text('Chief Minister Executive Governance Report', { align: 'center' });
     doc.moveDown(0.5);
     
-    // Emblem Circle
-    doc.circle(300, 160, 35).fill(accentColor);
-    doc.fillColor('#FFFFFF').fontSize(11).font('Helvetica-Bold').text('GOVT', 260, 155, { width: 80, align: 'center' });
+    // Emblem Circle/Image
+    if (logoPath) {
+      doc.image(logoPath, 265, 110, { width: 70 });
+    } else {
+      doc.circle(300, 160, 35).fill(accentColor);
+      doc.fillColor('#FFFFFF').fontSize(11).font('Helvetica-Bold').text('GOVT', 260, 155, { width: 80, align: 'center' });
+    }
     
     doc.x = 50;
     doc.y = 220;
@@ -191,11 +273,14 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     doc.text(`Generated At: ${data.currentTime}`, { align: 'center' });
     doc.text('Generated For: Honourable Chief Minister', { align: 'center' });
 
-    doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Confidential`, 50, 720, { align: 'center' });
+    // Temporarily clear bottom margin to prevent cover page footer from triggering page overflow
+    const savedBottomCover = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
+    doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Confidential`, 50, 755, { align: 'center' });
+    doc.page.margins.bottom = savedBottomCover;
 
-    // --- PAGE 2: SECTIONS 1 & 2 ---
+    // --- PAGE 2: CONTENT CONTINUOUS FLOW ---
     doc.addPage();
-    drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
     
     drawSectionHeader('SECTION 1: Executive Summary');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
@@ -215,12 +300,7 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     drawSectionHeader('SECTION 2: Current Situation Overview');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
     doc.text(data.currentSituationText || 'No situation overview available.', { lineGap: 2 });
-
-    doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 2`, 50, 720, { align: 'center' });
-
-    // --- PAGE 3: SECTIONS 3 & 4 ---
-    doc.addPage();
-    drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+    doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 3: District Intelligence');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
@@ -253,12 +333,7 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     }
     doc.moveDown(0.5);
     doc.text(data.departmentAnalysisText || 'No department analysis available.', { lineGap: 2 });
-
-    doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 3`, 50, 720, { align: 'center' });
-
-    // --- PAGE 4: SECTIONS 5 & 6 ---
-    doc.addPage();
-    drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+    doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 5: Pending Issues');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
@@ -286,12 +361,7 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     } else {
       doc.text('No recently resolved issues found.', { indent: 15 });
     }
-
-    doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 4`, 50, 720, { align: 'center' });
-
-    // --- PAGE 5: SECTIONS 7 & 8 ---
-    doc.addPage();
-    drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+    doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 7: Critical Incidents');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
@@ -301,12 +371,7 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     drawSectionHeader('SECTION 8: Audit Findings');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
     doc.text(data.auditFindingsText || 'No audit findings available.', { lineGap: 2 });
-
-    doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 5`, 50, 720, { align: 'center' });
-
-    // --- PAGE 6: SECTIONS 9 & 10 ---
-    doc.addPage();
-    drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+    doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 9: AI Governance Insights');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
@@ -316,12 +381,7 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     drawSectionHeader('SECTION 10: Chief Minister Action Brief');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
     doc.text(data.cmBriefingText || 'No action brief available.', { lineGap: 2 });
-
-    doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 6`, 50, 720, { align: 'center' });
-
-    // --- PAGE 7: SECTION 11 & CONCLUSION ---
-    doc.addPage();
-    drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+    doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 11: Resource Allocation Recommendations');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
@@ -339,7 +399,5 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     );
     doc.moveDown(1);
     doc.fontSize(9).font('Helvetica-Bold').text(`Generation Time: ${data.currentTime}`, { align: 'center' });
-
-    doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 7`, 50, 720, { align: 'center' });
   });
 }
