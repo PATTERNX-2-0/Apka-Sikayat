@@ -30,13 +30,15 @@ export function generateTrackingToken(): string {
 }
 
 export function getBackendUrl(): string {
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL;
-  }
   if (typeof window !== 'undefined' && window.location) {
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       return 'http://localhost:5002';
     }
+  }
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  if (typeof window !== 'undefined' && window.location) {
     // Auto-detect Render backend URL mapping
     if (window.location.hostname.endsWith('.onrender.com')) {
       const baseName = window.location.hostname

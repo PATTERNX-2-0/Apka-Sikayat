@@ -11,7 +11,7 @@ const smsService_1 = require("../services/smsService");
 const fcmService_1 = require("../services/fcmService");
 const firebaseAdmin_1 = require("../config/firebaseAdmin");
 // Load environment variables
-dotenv_1.default.config({ path: path_1.default.join(__dirname, '../frontend/.env') });
+dotenv_1.default.config({ path: path_1.default.join(__dirname, '../../../frontend/.env') });
 const PORT = process.env.PORT || 5002;
 const BROADCAST_URL = `http://localhost:${PORT}/api/internal/broadcast`;
 // Map status to FCM notification templates

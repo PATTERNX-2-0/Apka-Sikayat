@@ -23,8 +23,11 @@ const firebaseAdmin_1 = require("./config/firebaseAdmin");
 const grievanceValidator_1 = require("./services/grievanceValidator");
 const escalationService_1 = require("./services/escalationService");
 const whatsappController_1 = require("./controllers/whatsappController");
+const heatmapService_1 = require("./services/heatmapService");
+const briefingWorker_1 = require("./workers/briefingWorker");
+const copilotController_1 = require("./controllers/copilotController");
 // Load environment variables
-dotenv_1.default.config({ path: path_1.default.join(__dirname, '../frontend/.env') });
+dotenv_1.default.config({ path: path_1.default.join(__dirname, '../../frontend/.env') });
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
 // Dynamic CORS configurations
@@ -235,6 +238,15 @@ app.post('/api/admin/trigger-escalations', async (req, res) => {
         return res.status(500).json({ error: error.message });
     }
 });
+// AI GOVERNANCE COPILOT API ENDPOINTS
+app.post('/api/cm/copilot/chat', copilotController_1.handleCopilotChat);
+app.post('/api/cm/copilot/generate-custom-pdf', copilotController_1.handleCustomPDFRequest);
+app.post('/api/cm/copilot/generate-executive-report', copilotController_1.handleCMExecutiveReportPDF);
+app.post('/api/cm/copilot/visit', copilotController_1.handleVisitIntelligence);
+app.get('/api/cm/copilot/briefings', copilotController_1.getBriefingsArchive);
+app.post('/api/cm/copilot/briefings/generate', copilotController_1.handleBriefingGeneration);
+app.get('/api/cm/copilot/audits', copilotController_1.getAuditsDashboard);
+app.get('/api/cm/copilot/policies', copilotController_1.getPolicyRecommendations);
 // 4. Internal Endpoint: Trigger Real-time broadcast (Called by worker)
 app.post('/api/internal/broadcast', (req, res) => {
     const { complaintId, status, currentStep, timeline, notes, trackingToken } = req.body;
@@ -344,6 +356,29 @@ app.post('/api/validate-grievance', async (req, res) => {
         return res.status(500).json({ error: error.message || 'An error occurred during AI validation.' });
     }
 });
+// CM Heatmap Endpoints
+app.get('/api/cm/heatmap/live-data', (req, res) => {
+    try {
+        const state = (0, heatmapService_1.getHeatmapState)();
+        return res.status(200).json(state);
+    }
+    catch (error) {
+        console.error('[API Server] Live-data fetch error:', error.message);
+        return res.status(500).json({ error: error.message });
+    }
+});
+app.post('/api/cm/heatmap/sync', async (req, res) => {
+    try {
+        const force = req.body?.force === true;
+        const state = await (0, heatmapService_1.calculateHotspots)(force);
+        io.emit('heatmap_update', state);
+        return res.status(200).json(state);
+    }
+    catch (error) {
+        console.error('[API Server] Sync error:', error.message);
+        return res.status(500).json({ error: error.message });
+    }
+});
 // 6. Diagnostics Endpoint: Health check for Render deployments
 app.get('/health', (req, res) => {
     const dbStatus = (0, databaseService_1.isPostgresConnected)() ? 'connected' : 'disconnected';
@@ -367,6 +402,15 @@ server.listen(PORT, async () => {
     await (0, databaseService_1.initDatabase)();
     await (0, rateLimiter_1.initRateLimiter)();
     await (0, bullmqService_1.initSMSQueue)();
+    // Start real-time Firestore listener for heatmap
+    (0, heatmapService_1.startFirebaseListener)(io);
+    // Start automated briefings scheduler background worker
+    try {
+        (0, briefingWorker_1.startBriefingScheduler)();
+    }
+    catch (err) {
+        console.error('[API Server] Failed to start briefings scheduler:', err.message);
+    }
     // Run initial escalation check
     try {
         await (0, escalationService_1.runEscalationCycle)();

@@ -1,10 +1,17 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.analytics = exports.db = exports.auth = exports.app = void 0;
 const app_1 = require("firebase/app");
 const auth_1 = require("firebase/auth");
 const firestore_1 = require("firebase/firestore");
 const analytics_1 = require("firebase/analytics");
+const dotenv_1 = __importDefault(require("dotenv"));
+const path_1 = __importDefault(require("path"));
+// Load environment variables
+dotenv_1.default.config({ path: path_1.default.join(__dirname, '../frontend/.env') });
 const firebaseConfig = {
     apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
     authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,

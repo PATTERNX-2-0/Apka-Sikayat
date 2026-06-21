@@ -160,9 +160,6 @@ async function handleWebhookEvent(req, res) {
         console.warn('[WhatsApp Webhook] Firestore session fetch failed:', err.message);
         session = localSessions.get(from);
     }
-    if (!session) {
-        session = { state: 'START', phone: from };
-    }
     // Log conversation step
     try {
         await (0, firestore_1.addDoc)((0, firestore_1.collection)(firebase_1.db, 'whatsapp_conversations'), {
@@ -178,9 +175,21 @@ async function handleWebhookEvent(req, res) {
     }
     try {
         // START Greeting Check
-        const isGreeting = ['hi', 'hello', 'complaint', 'help', 'hey'].includes(textBody.toLowerCase());
-        if (isGreeting && session.state !== 'START') {
-            session.state = 'START';
+        const isGreeting = ['hi', 'hello', 'complaint', 'help', 'hey', 'start'].includes(textBody.toLowerCase());
+        if (!session) {
+            if (isGreeting) {
+                session = { state: 'START', phone: from };
+            }
+            else {
+                // Send a polite greeting/help message instead of starting the registration wizard
+                await sendReply(from, "Hello! To register a new grievance, please reply with *Hi*, *Hello*, or *Complaint*.");
+                return;
+            }
+        }
+        else {
+            if (isGreeting) {
+                session.state = 'START';
+            }
         }
         // Step 1: Greeting & Welcome
         if (session.state === 'START') {

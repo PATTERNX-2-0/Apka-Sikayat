@@ -40,7 +40,7 @@ exports.adminMessaging = exports.adminAuth = exports.adminDb = exports.isFirebas
 const admin = __importStar(require("firebase-admin"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
-dotenv_1.default.config({ path: path_1.default.join(__dirname, '../frontend/.env') });
+dotenv_1.default.config({ path: path_1.default.join(__dirname, '../../frontend/.env') });
 const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'apka-sikayat';
 let isFirebaseAdminInitialized = false;
 exports.isFirebaseAdminInitialized = isFirebaseAdminInitialized;

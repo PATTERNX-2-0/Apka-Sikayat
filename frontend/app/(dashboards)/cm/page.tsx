@@ -65,6 +65,14 @@ export default function CMWarRoomDashboard() {
 
   // 2. DISTRICT RANKINGS COMPILATION
   const districtGroups: { [key: string]: { open: number, critical: number, ratings: number[] } } = {};
+  const delhiDistrictsList = [
+    'Central Delhi', 'East Delhi', 'New Delhi', 'North Delhi', 'North East Delhi',
+    'North West Delhi', 'Shahdara', 'South Delhi', 'South East Delhi', 'South West Delhi', 'West Delhi'
+  ];
+  delhiDistrictsList.forEach(dist => {
+    districtGroups[dist] = { open: 0, critical: 0, ratings: [] };
+  });
+
   complaints.forEach(c => {
     const dist = c.district || 'New Delhi';
     if (!districtGroups[dist]) {
@@ -141,12 +149,14 @@ export default function CMWarRoomDashboard() {
     else if (r === 3) neutral++;
     else negative++;
   });
-  const totalFeedback = feedbackList.length || 1;
+  const totalFeedback = feedbackList.length;
   const csatSentiment = [
-    { name: 'Positive Feedback', value: Math.round((positive / totalFeedback) * 100) || 75, color: '#22C55E' },
-    { name: 'Neutral Inquiry', value: Math.round((neutral / totalFeedback) * 100) || 15, color: '#87CEEB' },
-    { name: 'Negative Escalation', value: Math.round((negative / totalFeedback) * 100) || 10, color: '#EF4444' },
+    { name: 'Positive Feedback', value: totalFeedback > 0 ? Math.round((positive / totalFeedback) * 100) : 0, color: '#22C55E' },
+    { name: 'Neutral Inquiry', value: totalFeedback > 0 ? Math.round((neutral / totalFeedback) * 100) : 0, color: '#87CEEB' },
+    { name: 'Negative Escalation', value: totalFeedback > 0 ? Math.round((negative / totalFeedback) * 100) : 0, color: '#EF4444' },
   ];
+
+  const approvalRate = totalFeedback > 0 ? Math.round((positive / totalFeedback) * 100) : 100;
 
   // 5. GOVERNANCE PULSE METER
   const categoriesList = ['Roads', 'Water Related Issues', 'Electricity', 'Sanitation & Cleanliness', 'Healthcare', 'Public Safety'];
@@ -155,8 +165,8 @@ export default function CMWarRoomDashboard() {
     const totalCat = catComplaints.length;
     const catClosed = catComplaints.filter(c => ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
     
-    // Performance score based on resolution rate
-    const score = totalCat > 0 ? Math.round((catClosed / totalCat) * 100) : 80;
+    // Performance score based on resolution rate - 100% if no complaints exist
+    const score = totalCat > 0 ? Math.round((catClosed / totalCat) * 100) : 100;
     const colors = ['#1E3A8A', '#87CEEB', '#22C55E', '#F59E0B', '#87CEEB', '#1E3A8A'];
     const icons = [TrendingUp, Droplet, Zap, Wind, Stethoscope, ShieldAlert];
 
@@ -172,7 +182,7 @@ export default function CMWarRoomDashboard() {
   // Insert overall Delhi indicator
   const totalCount = complaints.length;
   const overallResolved = complaints.filter(c => ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
-  const overallScore = totalCount > 0 ? Math.round((overallResolved / totalCount) * 100) : 78;
+  const overallScore = totalCount > 0 ? Math.round((overallResolved / totalCount) * 100) : 100;
   pulseData.unshift({
     name: 'Overall Delhi',
     score: overallScore,
@@ -180,6 +190,10 @@ export default function CMWarRoomDashboard() {
     color: '#FF9933',
     trend: '+1.5'
   });
+
+  const avgCsat = totalFeedback > 0
+    ? parseFloat((feedbackList.reduce((a, b) => a + b.feedback.rating, 0) / totalFeedback).toFixed(1))
+    : 4.8;
 
   // 6. CSAT TREND INDEX
   const csatTrend = [
@@ -408,7 +422,7 @@ export default function CMWarRoomDashboard() {
           </div>
           <div className="text-right">
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">City Trust Index</p>
-            <p className="text-3xl font-black text-[#22C55E]">{(overallScore / 20).toFixed(1)}<span className="text-sm text-gray-400">/5.0</span></p>
+            <p className="text-3xl font-black text-[#22C55E]">{avgCsat.toFixed(1)}<span className="text-sm text-gray-400">/5.0</span></p>
           </div>
         </div>
 
@@ -429,7 +443,7 @@ export default function CMWarRoomDashboard() {
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-2xl font-black text-gray-900">{csatSentiment[0].value}%</span>
+                <span className="text-2xl font-black text-gray-900">{approvalRate}%</span>
                 <span className="text-[9px] font-bold text-gray-400 uppercase">Approval</span>
               </div>
             </div>

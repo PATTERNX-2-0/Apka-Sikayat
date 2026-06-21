@@ -20,9 +20,21 @@ import { isFirebaseAdminInitialized, adminDb } from './config/firebaseAdmin';
 import { validateGrievance } from './services/grievanceValidator';
 import { runEscalationCycle } from './services/escalationService';
 import { verifyWebhook, handleWebhookEvent } from './controllers/whatsappController';
+import { getHeatmapState, calculateHotspots, startFirebaseListener } from './services/heatmapService';
+import { startBriefingScheduler } from './workers/briefingWorker';
+import {
+  handleCopilotChat,
+  handleCustomPDFRequest,
+  handleCMExecutiveReportPDF,
+  handleVisitIntelligence,
+  getBriefingsArchive,
+  handleBriefingGeneration,
+  getAuditsDashboard,
+  getPolicyRecommendations
+} from './controllers/copilotController';
 
 // Load environment variables
-dotenv.config({ path: path.join(__dirname, '../frontend/.env') });
+dotenv.config({ path: path.join(__dirname, '../../frontend/.env') });
 
 const app = express();
 const server = http.createServer(app);
@@ -259,6 +271,15 @@ app.post('/api/admin/trigger-escalations', async (req, res) => {
   }
 });
 
+// AI GOVERNANCE COPILOT API ENDPOINTS
+app.post('/api/cm/copilot/chat', handleCopilotChat);
+app.post('/api/cm/copilot/generate-custom-pdf', handleCustomPDFRequest);
+app.post('/api/cm/copilot/generate-executive-report', handleCMExecutiveReportPDF);
+app.post('/api/cm/copilot/visit', handleVisitIntelligence);
+app.get('/api/cm/copilot/briefings', getBriefingsArchive);
+app.post('/api/cm/copilot/briefings/generate', handleBriefingGeneration);
+app.get('/api/cm/copilot/audits', getAuditsDashboard);
+app.get('/api/cm/copilot/policies', getPolicyRecommendations);
 
 // 4. Internal Endpoint: Trigger Real-time broadcast (Called by worker)
 app.post('/api/internal/broadcast', (req, res) => {
@@ -383,6 +404,29 @@ app.post('/api/validate-grievance', async (req, res) => {
   }
 });
 
+// CM Heatmap Endpoints
+app.get('/api/cm/heatmap/live-data', (req, res) => {
+  try {
+    const state = getHeatmapState();
+    return res.status(200).json(state);
+  } catch (error: any) {
+    console.error('[API Server] Live-data fetch error:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/cm/heatmap/sync', async (req, res) => {
+  try {
+    const force = req.body?.force === true;
+    const state = await calculateHotspots(force);
+    io.emit('heatmap_update', state);
+    return res.status(200).json(state);
+  } catch (error: any) {
+    console.error('[API Server] Sync error:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // 6. Diagnostics Endpoint: Health check for Render deployments
 app.get('/health', (req, res) => {
   const dbStatus = isPostgresConnected() ? 'connected' : 'disconnected';
@@ -411,6 +455,16 @@ server.listen(PORT, async () => {
   await initDatabase();
   await initRateLimiter();
   await initSMSQueue();
+
+  // Start real-time Firestore listener for heatmap
+  startFirebaseListener(io);
+
+  // Start automated briefings scheduler background worker
+  try {
+    startBriefingScheduler();
+  } catch (err: any) {
+    console.error('[API Server] Failed to start briefings scheduler:', err.message);
+  }
 
   // Run initial escalation check
   try {

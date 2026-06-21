@@ -6,7 +6,7 @@ import { sendPushNotification } from '../services/fcmService';
 import { isFirebaseAdminInitialized, adminDb } from '../config/firebaseAdmin';
 
 // Load environment variables
-dotenv.config({ path: path.join(__dirname, '../frontend/.env') });
+dotenv.config({ path: path.join(__dirname, '../../../frontend/.env') });
 
 const PORT = process.env.PORT || 5002;
 const BROADCAST_URL = `http://localhost:${PORT}/api/internal/broadcast`;

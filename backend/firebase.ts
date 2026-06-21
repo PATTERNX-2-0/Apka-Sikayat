@@ -2,6 +2,11 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getAnalytics, isSupported } from "firebase/analytics";
+import dotenv from "dotenv";
+import path from "path";
+
+// Load environment variables
+dotenv.config({ path: path.join(__dirname, '../frontend/.env') });
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
