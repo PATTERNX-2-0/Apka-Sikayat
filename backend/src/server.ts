@@ -19,6 +19,7 @@ import { maskPhoneNumber } from './services/cryptoService';
 import { isFirebaseAdminInitialized, adminDb } from './config/firebaseAdmin';
 import { validateGrievance } from './services/grievanceValidator';
 import { runEscalationCycle } from './services/escalationService';
+import { verifyWebhook, handleWebhookEvent } from './controllers/whatsappController';
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '../frontend/.env') });
@@ -394,6 +395,11 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// 7. WhatsApp Webhook Routes
+app.get('/api/webhooks/whatsapp', verifyWebhook);
+app.post('/api/webhooks/whatsapp', handleWebhookEvent);
+
 
 // Start Web Server
 server.listen(PORT, async () => {
