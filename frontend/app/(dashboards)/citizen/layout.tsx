@@ -2,12 +2,13 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LayoutDashboard, FileText, Activity, History, 
   MessageSquare, User, Settings, LogOut, Shield, Bell 
 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 
 const CORE_LINKS = [
   { name: 'Dashboard', href: '/citizen', icon: LayoutDashboard },
@@ -21,6 +22,8 @@ const CORE_LINKS = [
 const TopRightActions = () => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const { profile, signOut } = useAuth();
+  const router = useRouter();
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -31,6 +34,17 @@ const TopRightActions = () => {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  const getInitials = (name: string) => {
+    if (!name) return "U";
+    return name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+  };
+
+  const handleSignOut = async () => {
+    setIsOpen(false);
+    await signOut();
+    router.push('/login');
+  };
 
   return (
     <div className="flex items-center space-x-2 sm:space-x-4 relative" ref={menuRef}>
@@ -45,7 +59,7 @@ const TopRightActions = () => {
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-linear-to-r from-[#1E3A8A] to-[#2a4eab] text-white font-semibold text-sm shadow-sm hover:shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-[#87CEEB]"
       >
-        RS
+        {getInitials(profile?.fullName || "")}
       </button>
 
       {/* Profile Dropdown */}
@@ -59,8 +73,8 @@ const TopRightActions = () => {
             className="absolute right-0 top-12 sm:top-14 w-56 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden z-[100]"
           >
             <div className="p-4 border-b border-gray-50 bg-[#F8FAFC]">
-              <p className="text-sm font-bold text-[#1E3A8A]">Rahul Sharma</p>
-              <p className="text-xs text-gray-500 truncate">citizen@demo.com</p>
+              <p className="text-sm font-bold text-[#1E3A8A] truncate">{profile?.fullName || "Loading..."}</p>
+              <p className="text-xs text-gray-500 truncate">{profile?.email || ""}</p>
             </div>
             <div className="p-2 space-y-1">
               <Link href="/citizen/profile" onClick={() => setIsOpen(false)} className="flex items-center px-3 py-2 text-sm text-gray-600 rounded-xl hover:bg-[#87CEEB]/10 hover:text-[#1E3A8A] transition-colors">
@@ -71,9 +85,12 @@ const TopRightActions = () => {
               </Link>
             </div>
             <div className="p-2 border-t border-gray-50">
-              <Link href="/login" onClick={() => setIsOpen(false)} className="flex items-center px-3 py-2 text-sm text-red-600 rounded-xl hover:bg-red-50 transition-colors">
+              <button 
+                onClick={handleSignOut} 
+                className="w-full flex items-center px-3 py-2 text-sm text-red-600 rounded-xl hover:bg-red-50 transition-colors text-left font-medium"
+              >
                 <LogOut className="w-4 h-4 mr-3" /> Sign Out
-              </Link>
+              </button>
             </div>
           </motion.div>
         )}
@@ -84,7 +101,28 @@ const TopRightActions = () => {
 
 export default function CitizenLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/login');
+    }
+  }, [user, loading, router]);
+
   const isActive = (path: string) => pathname === path || (path !== '/citizen' && pathname.startsWith(path));
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC]">
+        <div className="w-8 h-8 border-4 border-[#1E3A8A] border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col md:flex-row">

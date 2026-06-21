@@ -1,32 +1,70 @@
 "use client";
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Search, Filter, ArrowUpDown, ChevronLeft, ChevronRight, 
   FileText, CheckCircle2, Clock, AlertCircle, Eye, MapPin, Calendar
 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { db } from '@/lib/firebase';
+import { collection, query, where, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
-// Mock Data for History
+// Mock Data for History - used for seeding
 const MOCK_HISTORY = [
-  { id: "CMP-1008", title: "Pothole on Main Arterial Road", category: "Roads & Traffic", status: "Resolved", date: "2026-10-25", district: "South Delhi" },
-  { id: "CMP-1007", title: "No Water Supply for 2 Days", category: "Water Supply", status: "In Progress", date: "2026-10-24", district: "West Delhi" },
-  { id: "CMP-1006", title: "Garbage Dump Overflowing", category: "Sanitation", status: "Pending", date: "2026-10-22", district: "East Delhi" },
-  { id: "CMP-1005", title: "Streetlights not working", category: "Electricity", status: "Closed", date: "2026-10-18", district: "Central Delhi" },
-  { id: "CMP-1004", title: "Illegal Parking in Residential Area", category: "Law & Order", status: "Escalated", date: "2026-10-15", district: "South West Delhi" },
-  { id: "CMP-1003", title: "Sewer Line Blockage", category: "Sanitation", status: "Resolved", date: "2026-10-10", district: "North Delhi" },
-  { id: "CMP-1002", title: "Frequent Power Cuts", category: "Electricity", status: "Closed", date: "2026-09-28", district: "East Delhi" },
-  { id: "CMP-1001", title: "Stray Dog Menace", category: "Public Health", status: "Closed", date: "2026-09-15", district: "South Delhi" },
+  { id: "CMP-1008", title: "Pothole on Main Arterial Road", category: "Roads & Traffic", status: "Resolved", date: "2026-06-19", district: "South Delhi" },
+  { id: "CMP-1007", title: "No Water Supply for 2 Days", category: "Water Supply", status: "In Progress", date: "2026-06-18", district: "West Delhi" },
+  { id: "CMP-1006", title: "Garbage Dump Overflowing", category: "Sanitation & Waste", status: "Pending", date: "2026-06-17", district: "East Delhi" },
+  { id: "CMP-1005", title: "Streetlights not working", category: "Electricity", status: "Closed", date: "2026-06-15", district: "Central Delhi" },
+  { id: "CMP-1004", title: "Illegal Parking in Residential Area", category: "Law & Order", status: "Escalated", date: "2026-06-12", district: "South West Delhi" },
+  { id: "CMP-1003", title: "Sewer Line Blockage", category: "Sanitation & Waste", status: "Resolved", date: "2026-06-10", district: "North Delhi" },
+  { id: "CMP-1002", title: "Frequent Power Cuts", category: "Electricity", status: "Closed", date: "2026-06-08", district: "East Delhi" },
+  { id: "CMP-1001", title: "Stray Dog Menace", category: "Public Health", status: "Closed", date: "2026-06-05", district: "South Delhi" },
 ];
 
 const ITEMS_PER_PAGE = 5;
 
 export default function ComplaintHistoryPage() {
+  const { user } = useAuth();
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [sortBy, setSortBy] = useState("Newest");
   const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    const fetchAndSeedComplaints = async () => {
+      if (!user) return;
+      try {
+        const q = query(collection(db, "complaints"), where("uid", "==", user.uid));
+        const querySnapshot = await getDocs(q);
+        const fetchedList: any[] = [];
+        const mockIds = ["CMP-1008", "CMP-1007", "CMP-1006", "CMP-1005", "CMP-1004", "CMP-1003", "CMP-1002", "CMP-1001"];
+        
+        for (const docSnap of querySnapshot.docs) {
+          if (mockIds.includes(docSnap.id)) {
+            try {
+              await deleteDoc(docSnap.ref);
+            } catch (err) {
+              console.error("Failed to delete mock document:", docSnap.id, err);
+            }
+          } else {
+            fetchedList.push(docSnap.data());
+          }
+        }
+
+        setComplaints(fetchedList);
+      } catch (error) {
+        console.error("Error fetching complaints:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAndSeedComplaints();
+  }, [user]);
 
   // Status Badge Styling Helper
   const getStatusConfig = (status: string) => {
@@ -42,7 +80,7 @@ export default function ComplaintHistoryPage() {
 
   // Filter and Sort Logic
   const filteredAndSortedData = useMemo(() => {
-    let result = MOCK_HISTORY;
+    let result = [...complaints];
 
     // 1. Search
     if (searchTerm) {
@@ -66,7 +104,7 @@ export default function ComplaintHistoryPage() {
     });
 
     return result;
-  }, [searchTerm, statusFilter, sortBy]);
+  }, [complaints, searchTerm, statusFilter, sortBy]);
 
   // Pagination Logic
   const totalPages = Math.ceil(filteredAndSortedData.length / ITEMS_PER_PAGE);
@@ -77,6 +115,14 @@ export default function ComplaintHistoryPage() {
 
   // Reset to page 1 when filters change
   React.useEffect(() => { setCurrentPage(1); }, [searchTerm, statusFilter, sortBy]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center bg-transparent">
+        <div className="w-8 h-8 border-4 border-[#1E3A8A] border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-6xl mx-auto space-y-6">
