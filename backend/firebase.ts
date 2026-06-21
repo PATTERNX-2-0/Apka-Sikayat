@@ -24,7 +24,7 @@ console.log("[Firebase Client] Firestore DB instance created:", !!db);
 // Analytics is only initialized on client-side
 let analytics = null;
 if (typeof window !== "undefined") {
-  isSupported().then((yes) => {
+  isSupported().then((yes: boolean) => {
     if (yes) {
       analytics = getAnalytics(app);
     }
