@@ -145,6 +145,9 @@ export function generateCustomPDF(text: string, title: string): Promise<Buffer> 
 /**
  * Generate CM Executive Governance Report PDF (11 Sections)
  */
+/**
+ * Generate CM Executive Governance Report PDF (11 Sections)
+ */
 export function generateCMExecutiveReport(data: any): Promise<Buffer> {
   return createPDFBuffer((doc) => {
     const primaryColor = '#1E3A8A';
@@ -202,21 +205,16 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     doc.text(`Escalated Complaints: ${data.escalated}`);
     doc.text(`Critical Complaints: ${data.critical}`);
     doc.text(`State Resolution Rate: ${data.resolutionRate}%`);
-    doc.text(`Citizen Satisfaction Score (CSAT): ${data.csat}/5.0`);
-    doc.text(`High Priority Cases: ${data.critical}`);
+    doc.text(`Citizen Satisfaction Score (CSAT): ${data.csat}`);
     doc.text(`Today's New Complaints: ${data.todayNew}`);
     doc.text(`Today's Resolved Complaints: ${data.todayResolved}`);
+    doc.moveDown(0.5);
+    doc.text(data.executiveSummaryText || 'No executive summary available.', { lineGap: 2 });
     doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 2: Current Situation Overview');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
-    doc.text('What is happening today: Real-time monitors highlight active operations across all 11 districts.');
-    doc.text(`Major ongoing issues: Sewerage pipeline grids and local water sanitation backlogs represent the bulk of active reports.`);
-    doc.text('Major public concerns: Speed of resolution in seasonal hotspots.');
-    doc.text(`Most affected districts: South West Delhi and East Delhi represent the densest active nodes.`);
-    doc.text('Most affected departments: Delhi Jal Board (DJB) and Municipal Corporation (MCD).');
-    doc.text('Emergency situations: None declared. Grid pressure remaining within operational parameters.');
-    doc.text(`Critical alerts: ${data.critical} unresolved critical issues flagged for immediate department routing.`);
+    doc.text(data.currentSituationText || 'No situation overview available.', { lineGap: 2 });
 
     doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 2`, 50, 720, { align: 'center' });
 
@@ -226,30 +224,35 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
 
     drawSectionHeader('SECTION 3: District Intelligence');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
-    doc.text(`Top Districts By Complaints: ${data.topDistricts.join(', ')}`);
-    doc.text(`Top Districts By Resolution Rate: ${data.topDistricts.join(', ')}`);
-    doc.text(`Worst Performing Districts: ${data.lowestDistricts.join(', ')}`);
-    doc.text(`Critical Districts: South West Delhi (High workload ratio)`);
-    doc.text('Heatmap Summary: Major hotspots identified around Dwarka Sector 5 and Preet Vihar.');
+    doc.text(`Top Districts By Complaints: ${data.topDistricts ? data.topDistricts.join(', ') : 'N/A'}`);
+    doc.text(`Worst Performing Districts: ${data.lowestDistricts ? data.lowestDistricts.join(', ') : 'N/A'}`);
     doc.moveDown(0.5);
     doc.font('Helvetica-Bold').text('District Breakdown:');
     doc.font('Helvetica');
-    data.districtList.forEach((d: any) => {
-      doc.text(` - ${d.name}: Total ${d.total} | Resolution Rate: ${d.rate}%`, { indent: 15 });
-    });
+    if (data.districtList && data.districtList.length > 0) {
+      data.districtList.forEach((d: any) => {
+        doc.text(` - ${d.name}: Total ${d.total} | Resolution Rate: ${d.rate}%`, { indent: 15 });
+      });
+    } else {
+      doc.text('No district data available.', { indent: 15 });
+    }
+    doc.moveDown(0.5);
+    doc.text(data.districtAnalysisText || 'No district analysis available.', { lineGap: 2 });
     doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 4: Department Intelligence');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
     doc.font('Helvetica-Bold').text('Department Performance Breakdown:');
     doc.font('Helvetica');
-    data.departmentList.forEach((dept: any) => {
-      doc.text(` - ${dept.name}: Total ${dept.total} | Resolution Rate: ${dept.rate}%`, { indent: 15 });
-    });
+    if (data.departmentList && data.departmentList.length > 0) {
+      data.departmentList.forEach((dept: any) => {
+        doc.text(` - ${dept.name}: Total ${dept.total} | Resolution Rate: ${dept.rate}%`, { indent: 15 });
+      });
+    } else {
+      doc.text('No department data available.', { indent: 15 });
+    }
     doc.moveDown(0.5);
-    doc.text(`Department Workload: Delhi Jal Board and MCD handle over 65% of state grievances.`);
-    doc.text(`Department Backlogs: Cumulative pending backlog across all departments stands at ${data.pending} cases.`);
-    doc.text('Officer Performance: Zonal officers are tracking SLAs. Low rating flags are routed for inspection.');
+    doc.text(data.departmentAnalysisText || 'No department analysis available.', { lineGap: 2 });
 
     doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 3`, 50, 720, { align: 'center' });
 
@@ -263,11 +266,11 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
     doc.font('Helvetica');
     if (data.pendingList && data.pendingList.length > 0) {
       data.pendingList.forEach((c: any, index: number) => {
-        doc.text(`${index + 1}. Issue: ${c.title || c.description || 'N/A'}\n   Location: ${c.district || 'General'} | Department: ${c.department || 'N/A'} | Status: ${c.status || 'N/A'} | Risk: High`, { indent: 15 });
+        doc.text(`${index + 1}. Issue: ${c.title || c.description || 'N/A'}\n   Location: ${c.district || 'General'} | Department: ${c.department || 'N/A'} | Status: ${c.status || 'N/A'} | Priority: ${c.priority || 'N/A'}`, { indent: 15 });
         doc.moveDown(0.3);
       });
     } else {
-      doc.text('No high-priority pending issues found.', { indent: 15 });
+      doc.text('No pending issues found.', { indent: 15 });
     }
     doc.moveDown(1.2);
 
@@ -292,22 +295,12 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
 
     drawSectionHeader('SECTION 7: Critical Incidents');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
-    doc.text(`Women Safety Cases: ${data.womenSafety}`);
-    doc.text(`Corruption Cases: ${data.corruption}`);
-    doc.text(`Fraud Cases (False Resolution flags): ${data.auditFlags}`);
-    doc.text(`Public Safety Risks (Open wiring/road cavities): ${data.infrastructure}`);
-    doc.text(`Flood Risks (Drainage leaks): ${data.flood}`);
-    doc.text(`Health Emergencies: ${data.health}`);
-    doc.text('Environmental Hazards: Low air quality indexing warnings in select industrial sectors.');
+    doc.text(data.riskAnalysisText || 'No risk analysis available.', { lineGap: 2 });
     doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 8: Audit Findings');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
-    doc.text(`Suspicious Activities: ${data.auditFlags} cases resolved with low citizen ratings (potential fake resolution).`);
-    doc.text(`Potential Fraud: Geofencing coordinates mismatch in resolved water pipeline leaks.`);
-    doc.text('Contractor Risks: Minor delays flagged in local road maintenance contracts.');
-    doc.text('Officer Risks: Two zonal offices show resolution rates below the 70% threshold.');
-    doc.text('Audit Recommendations: Implement mandatory on-site geofenced selfie verification for resolutions.');
+    doc.text(data.auditFindingsText || 'No audit findings available.', { lineGap: 2 });
 
     doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 5`, 50, 720, { align: 'center' });
 
@@ -317,21 +310,12 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
 
     drawSectionHeader('SECTION 9: AI Governance Insights');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
-    doc.text('Complaint Trends: Sewer and water-related reports show a minor seasonal increase.');
-    doc.text(`Growth Trends: Steady overall state workload, resolved cases matching input velocity.`);
-    doc.text('Hotspots: Clusters localized in East Delhi and South West Delhi corridors.');
-    doc.text('Emerging Risks: Short-term utility network load increases during summer weeks.');
-    doc.text('Future Predictions: Backlogs projected to reduce by 10% next week.');
-    doc.text('Strategic Recommendations: Scale centralized field teams during peak complaint hours.');
+    doc.text(data.aiInsightsText || 'No AI governance insights available.', { lineGap: 2 });
     doc.moveDown(1.2);
 
     drawSectionHeader('SECTION 10: Chief Minister Action Brief');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
-    doc.text(`Immediate Actions Required: Direct inspection teams to review the ${data.auditFlags} audit-flagged cases.`);
-    doc.text('Priority Areas: MCD road maintenance timelines and water pipeline leaks.');
-    doc.text('Talking Points: Digital governance tracking, real-time SLAs, citizen feedback validation.');
-    doc.text('Citizen Concerns: Grid efficiency and municipal response accountability.');
-    doc.text('Recommended Executive Actions: Conduct review meeting with DJB and PWD Zonal Heads.');
+    doc.text(data.cmBriefingText || 'No action brief available.', { lineGap: 2 });
 
     doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 6`, 50, 720, { align: 'center' });
 
@@ -341,11 +325,7 @@ export function generateCMExecutiveReport(data: any): Promise<Buffer> {
 
     drawSectionHeader('SECTION 11: Resource Allocation Recommendations');
     doc.fillColor(textColor).fontSize(9).font('Helvetica');
-    doc.text('Officer Redistribution: Deploy additional field monitors from low-load wards to South West Delhi.');
-    doc.text('Budget Reallocation: Shift emergency backup reserves to road restoration projects.');
-    doc.text('Emergency Funding: Allocate 50 Lakhs emergency funding for local water pipeline restorations.');
-    doc.text('Department Optimization: Integrate shared dashboard analytics between DJB and PWD.');
-    doc.text('Infrastructure Investments: Invest in smart geofenced resolution verification modules.');
+    doc.text(data.resourceAllocationText || 'No resource allocation recommendations available.', { lineGap: 2 });
     doc.moveDown(1.5);
 
     doc.strokeColor('#E5E7EB').lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
