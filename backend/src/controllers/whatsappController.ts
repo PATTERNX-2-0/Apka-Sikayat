@@ -4,6 +4,8 @@ import { sendWhatsAppText, downloadWhatsAppMedia } from '../services/whatsappSer
 import { validateGrievance } from '../services/grievanceValidator';
 import { generateTrackingToken, getAppUrl, getBackendUrl } from '../services/urlHelper';
 import { sendTwilioSMS } from '../services/twilioService';
+import { db } from '../../firebase';
+import { doc, getDoc, setDoc, addDoc, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
 
 const VERIFY_TOKEN = 'apka_sikayat_whatsapp_token';
 
@@ -35,7 +37,7 @@ export function verifyWebhook(req: Request, res: Response) {
  * AI Text Validation using Gemini 2.5 Flash
  */
 async function validateGrievanceText(description: string, district: string): Promise<any> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
+  const apiKey = process.env.WHATSAPP_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is not configured.');
   }
@@ -103,7 +105,7 @@ Output raw JSON only.
  * Audio voice note transcription
  */
 async function transcribeVoiceNote(base64Audio: string, mimeType: string): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
+  const apiKey = process.env.WHATSAPP_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
   if (!apiKey) return 'Transcription API key not set.';
 
   const rawBase64 = base64Audio.includes('base64,') ? base64Audio.split('base64,')[1] : base64Audio;
@@ -158,10 +160,16 @@ export async function handleWebhookEvent(req: Request, res: Response) {
 
   // Get active session
   let session: any = null;
-  if (isFirebaseAdminInitialized && adminDb) {
-    const doc = await adminDb.collection('whatsapp_sessions').doc(from).get();
-    if (doc.exists) session = doc.data();
-  } else {
+  try {
+    const sessionDocRef = doc(db, 'whatsapp_sessions', from);
+    const sessionDocSnap = await getDoc(sessionDocRef);
+    if (sessionDocSnap.exists()) {
+      session = sessionDocSnap.data();
+    } else {
+      session = localSessions.get(from);
+    }
+  } catch (err: any) {
+    console.warn('[WhatsApp Webhook] Firestore session fetch failed:', err.message);
     session = localSessions.get(from);
   }
 
@@ -170,14 +178,16 @@ export async function handleWebhookEvent(req: Request, res: Response) {
   }
 
   // Log conversation step
-  if (isFirebaseAdminInitialized && adminDb) {
-    await adminDb.collection('whatsapp_conversations').add({
+  try {
+    await addDoc(collection(db, 'whatsapp_conversations'), {
       phone: from,
       direction: 'inbound',
       messageType: message.type,
       text: textBody,
       timestamp: new Date().toISOString()
     });
+  } catch (err: any) {
+    console.warn('[WhatsApp Webhook] Firestore inbound convo log failed:', err.message);
   }
 
   try {
@@ -358,12 +368,16 @@ export async function handleWebhookEvent(req: Request, res: Response) {
 async function proceedToProfileCreation(from: string, session: any) {
   let userProfile: any = null;
 
-  if (isFirebaseAdminInitialized && adminDb) {
-    const snap = await adminDb.collection('users').where('phone', '==', session.verifiedPhone).limit(1).get();
+  try {
+    const usersQuery = query(collection(db, 'users'), where('phone', '==', session.verifiedPhone));
+    const snap = await getDocs(usersQuery);
     if (!snap.empty) {
       userProfile = snap.docs[0].data();
+    } else {
+      userProfile = localUsers.get(from);
     }
-  } else {
+  } catch (err: any) {
+    console.warn('[WhatsApp Webhook] Firestore user profile query failed:', err.message);
     userProfile = localUsers.get(from);
   }
 
@@ -383,9 +397,11 @@ async function proceedToProfileCreation(from: string, session: any) {
       joinedDate: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
     };
 
-    if (isFirebaseAdminInitialized && adminDb) {
-      await adminDb.collection('users').doc(newUserUid).set(userProfile);
-    } else {
+    try {
+      const userDocRef = doc(db, 'users', newUserUid);
+      await setDoc(userDocRef, userProfile);
+    } catch (err: any) {
+      console.warn('[WhatsApp Webhook] Firestore user profile create failed:', err.message);
       localUsers.set(from, userProfile);
     }
     console.log(`[WhatsApp Webhook] Created new citizen profile for ${session.fullName}`);
@@ -461,23 +477,26 @@ async function createComplaintFromSession(from: string, session: any) {
   };
 
   // Save to database
-  if (isFirebaseAdminInitialized && adminDb) {
-    await adminDb.collection('complaints').doc(complaintId).set(complaintData);
+  try {
+    const complaintDocRef = doc(db, 'complaints', complaintId);
+    await setDoc(complaintDocRef, complaintData);
     
     // Step 9: Store ai_analysis
-    await adminDb.collection('ai_analysis').add({
+    await addDoc(collection(db, 'ai_analysis'), {
       complaintId,
       result: aiResult,
       timestamp: new Date().toISOString()
     });
 
     // Store complaint_events
-    await adminDb.collection('complaint_events').add({
+    await addDoc(collection(db, 'complaint_events'), {
       complaintId,
       status: 'Submitted',
       message: 'Grievance submitted via WhatsApp.',
       timestamp: new Date().toISOString()
     });
+  } catch (err: any) {
+    console.warn('[WhatsApp Webhook] Firestore complaints save failed:', err.message);
   }
 
   // Delete session
@@ -487,12 +506,14 @@ async function createComplaintFromSession(from: string, session: any) {
   const smsBody = `Dear Citizen, Your grievance has been successfully registered. Complaint ID: ${complaintId}. Track Your Complaint: ${trackingLink} - CM Grievance Portal`;
   try {
     await sendTwilioSMS(session.verifiedPhone, smsBody);
-    if (isFirebaseAdminInitialized && adminDb) {
-      await adminDb.collection('sms_logs').add({
+    try {
+      await addDoc(collection(db, 'sms_logs'), {
         phone: session.verifiedPhone,
         body: smsBody,
         timestamp: new Date().toISOString()
       });
+    } catch (dbErr: any) {
+      console.warn('[WhatsApp Webhook] Firestore sms log save failed:', dbErr.message);
     }
   } catch (smsErr) {
     console.error('[WhatsApp Webhook] Twilio SMS dispatch failed:', smsErr);
@@ -525,28 +546,34 @@ async function createComplaintFromSession(from: string, session: any) {
 
 async function sendReply(to: string, text: string) {
   await sendWhatsAppText(to, text);
-  if (isFirebaseAdminInitialized && adminDb) {
-    await adminDb.collection('whatsapp_conversations').add({
+  try {
+    await addDoc(collection(db, 'whatsapp_conversations'), {
       phone: to,
       direction: 'outbound',
       text: text,
       timestamp: new Date().toISOString()
     });
+  } catch (err: any) {
+    console.warn('[WhatsApp Webhook] Firestore outbound convo log failed:', err.message);
   }
 }
 
 async function saveSession(phone: string, session: any) {
-  if (isFirebaseAdminInitialized && adminDb) {
-    await adminDb.collection('whatsapp_sessions').doc(phone).set(session);
-  } else {
+  try {
+    const sessionDocRef = doc(db, 'whatsapp_sessions', phone);
+    await setDoc(sessionDocRef, session);
+  } catch (err: any) {
+    console.warn('[WhatsApp Webhook] Firestore save session failed:', err.message);
     localSessions.set(phone, session);
   }
 }
 
 async function deleteSession(phone: string) {
-  if (isFirebaseAdminInitialized && adminDb) {
-    await adminDb.collection('whatsapp_sessions').doc(phone).delete();
-  } else {
+  try {
+    const sessionDocRef = doc(db, 'whatsapp_sessions', phone);
+    await deleteDoc(sessionDocRef);
+  } catch (err: any) {
+    console.warn('[WhatsApp Webhook] Firestore delete session failed:', err.message);
     localSessions.delete(phone);
   }
 }

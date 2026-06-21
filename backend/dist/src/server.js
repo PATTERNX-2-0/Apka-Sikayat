@@ -21,6 +21,8 @@ const bullmqService_1 = require("./services/bullmqService");
 const cryptoService_1 = require("./services/cryptoService");
 const firebaseAdmin_1 = require("./config/firebaseAdmin");
 const grievanceValidator_1 = require("./services/grievanceValidator");
+const escalationService_1 = require("./services/escalationService");
+const whatsappController_1 = require("./controllers/whatsappController");
 // Load environment variables
 dotenv_1.default.config({ path: path_1.default.join(__dirname, '../frontend/.env') });
 const app = (0, express_1.default)();
@@ -218,6 +220,21 @@ app.get('/api/admin/sms-logs', async (req, res) => {
         return res.status(500).json({ error: error.message });
     }
 });
+// Admin Route: Manual/Triggered Escalation Check Cycle
+app.post('/api/admin/trigger-escalations', async (req, res) => {
+    try {
+        const stats = await (0, escalationService_1.runEscalationCycle)();
+        return res.status(200).json({
+            success: true,
+            message: 'Escalation cycle run successfully.',
+            ...stats
+        });
+    }
+    catch (error) {
+        console.error('[API Server] Escalation cycle failed:', error.message);
+        return res.status(500).json({ error: error.message });
+    }
+});
 // 4. Internal Endpoint: Trigger Real-time broadcast (Called by worker)
 app.post('/api/internal/broadcast', (req, res) => {
     const { complaintId, status, currentStep, timeline, notes, trackingToken } = req.body;
@@ -338,6 +355,9 @@ app.get('/health', (req, res) => {
         timestamp: new Date().toISOString()
     });
 });
+// 7. WhatsApp Webhook Routes
+app.get('/api/webhooks/whatsapp', whatsappController_1.verifyWebhook);
+app.post('/api/webhooks/whatsapp', whatsappController_1.handleWebhookEvent);
 // Start Web Server
 server.listen(PORT, async () => {
     console.log(`===============================================`);
@@ -347,6 +367,22 @@ server.listen(PORT, async () => {
     await (0, databaseService_1.initDatabase)();
     await (0, rateLimiter_1.initRateLimiter)();
     await (0, bullmqService_1.initSMSQueue)();
+    // Run initial escalation check
+    try {
+        await (0, escalationService_1.runEscalationCycle)();
+    }
+    catch (err) {
+        console.error('[API Server] Initial escalation check failed:', err.message);
+    }
+    // Schedule periodic escalation checks (every 10 minutes)
+    setInterval(async () => {
+        try {
+            await (0, escalationService_1.runEscalationCycle)();
+        }
+        catch (err) {
+            console.error('[API Server] Periodic escalation check failed:', err.message);
+        }
+    }, 10 * 60 * 1000);
     // Legacy background worker processing inline (in-memory mode)
     if (process.env.NODE_ENV !== 'production' || !process.env.REDIS_HOST) {
         console.log('[API Server] Starting legacy queue worker inline...');

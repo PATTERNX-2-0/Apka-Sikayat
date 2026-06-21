@@ -54,7 +54,7 @@ You must respond with a JSON object containing precisely the following keys:
 - Output raw JSON only.
 `;
 async function callGemini(model, base64Image, mimeType, contextText) {
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
+    const apiKey = process.env.WHATSAPP_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
     if (!apiKey) {
         throw new Error("GEMINI_API_KEY environment variable is not set.");
     }

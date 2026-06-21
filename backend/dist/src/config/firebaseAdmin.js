@@ -51,30 +51,43 @@ exports.adminAuth = adminAuth;
 let adminMessaging = null;
 exports.adminMessaging = adminMessaging;
 try {
-    if (admin.apps.length === 0) {
-        // If a service account env exists, use it
-        if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-            const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-            admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount),
-                projectId: projectId
-            });
-            console.log("[Firebase Admin] Initialized with Service Account JSON");
+    const hasCredentials = !!(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIRESTORE_EMULATOR_HOST);
+    if (hasCredentials) {
+        if (admin.apps.length === 0) {
+            if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+                const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+                admin.initializeApp({
+                    credential: admin.credential.cert(serviceAccount),
+                    projectId: projectId
+                });
+                console.log("[Firebase Admin] Initialized with Service Account JSON");
+            }
+            else {
+                admin.initializeApp({
+                    projectId: projectId
+                });
+                console.log(`[Firebase Admin] Initialized with Project ID: ${projectId}`);
+            }
         }
-        else {
-            // Initialize with basic Project ID config (works for Firestore local emulation and simple credentials)
-            admin.initializeApp({
-                projectId: projectId
-            });
-            console.log(`[Firebase Admin] Initialized with Project ID: ${projectId}`);
-        }
+        exports.adminDb = adminDb = admin.firestore();
+        exports.adminAuth = adminAuth = admin.auth();
+        exports.adminMessaging = adminMessaging = admin.messaging();
+        exports.isFirebaseAdminInitialized = isFirebaseAdminInitialized = true;
+        console.log("[Firebase Admin] Live Firestore database connected.");
     }
-    exports.adminDb = adminDb = admin.firestore();
-    exports.adminAuth = adminAuth = admin.auth();
-    exports.adminMessaging = adminMessaging = admin.messaging();
-    exports.isFirebaseAdminInitialized = isFirebaseAdminInitialized = true;
+    else {
+        exports.isFirebaseAdminInitialized = isFirebaseAdminInitialized = false;
+        exports.adminDb = adminDb = null;
+        exports.adminAuth = adminAuth = null;
+        exports.adminMessaging = adminMessaging = null;
+        console.log("[Firebase Admin] Bypassed initialization (no service account JSON). Running server purely local.");
+    }
 }
 catch (error) {
+    exports.isFirebaseAdminInitialized = isFirebaseAdminInitialized = false;
+    exports.adminDb = adminDb = null;
+    exports.adminAuth = adminAuth = null;
+    exports.adminMessaging = adminMessaging = null;
     console.warn("[Firebase Admin] Warning: Failed to initialize Firebase Admin SDK. Services will fall back to simulation mode.", error.message);
 }
 exports.default = admin;
