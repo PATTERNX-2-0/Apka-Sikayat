@@ -7,16 +7,24 @@ exports.getEmbedding = getEmbedding;
 exports.upsertVector = upsertVector;
 exports.searchVectors = searchVectors;
 const dotenv_1 = __importDefault(require("dotenv"));
-dotenv_1.default.config();
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const PINECONE_API_KEY = process.env.PINECONE_API_KEY || "";
-const PINECONE_INDEX_HOST = process.env.PINECONE_INDEX_HOST || "";
+const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
+// Load environment variables dynamically with fallback paths
+let envPath = path_1.default.join(__dirname, '../../frontend/.env');
+if (!fs_1.default.existsSync(envPath)) {
+    envPath = path_1.default.join(__dirname, '../../../frontend/.env');
+}
+dotenv_1.default.config({ path: envPath });
+// Helpers to get env values dynamically
+const getGeminiApiKey = () => process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN || "";
+const getPineconeApiKey = () => process.env.PINECONE_API_KEY || "";
+const getPineconeIndexHost = () => process.env.PINECONE_INDEX_HOST || "";
 /**
  * Generate vector embedding for a given text using Gemini Text Embedding model
  */
 async function getEmbedding(text) {
     try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${GEMINI_API_KEY}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${getGeminiApiKey()}`;
         const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -48,11 +56,11 @@ async function getEmbedding(text) {
 async function upsertVector(id, text, metadata) {
     try {
         const vector = await getEmbedding(text);
-        const url = `${PINECONE_INDEX_HOST}/vectors/upsert`;
+        const url = `${getPineconeIndexHost()}/vectors/upsert`;
         const response = await fetch(url, {
             method: 'POST',
             headers: {
-                'Api-Key': PINECONE_API_KEY,
+                'Api-Key': getPineconeApiKey(),
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
@@ -86,11 +94,11 @@ async function upsertVector(id, text, metadata) {
 async function searchVectors(queryText, topK = 5) {
     try {
         const vector = await getEmbedding(queryText);
-        const url = `${PINECONE_INDEX_HOST}/query`;
+        const url = `${getPineconeIndexHost()}/query`;
         const response = await fetch(url, {
             method: 'POST',
             headers: {
-                'Api-Key': PINECONE_API_KEY,
+                'Api-Key': getPineconeApiKey(),
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
