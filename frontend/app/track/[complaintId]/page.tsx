@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { 
   FileText, ShieldCheck, Building2, Eye, Wrench, 
@@ -43,7 +43,9 @@ function mapStepTo7Stages(status: string, currentStep: number): number {
 
 export default function PublicTrackingPageById() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const complaintId = params?.complaintId as string;
+  const token = searchParams?.get('token') || '';
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -71,10 +73,13 @@ export default function PublicTrackingPageById() {
     if (!complaintId) return;
     try {
       setLoading(true);
-      const res = await fetch(`${backendUrl}/api/complaints/track/${complaintId}`);
+      const res = await fetch(`${backendUrl}/api/complaints/track/${complaintId}?token=${token}`);
       if (res.status === 410) {
         setIsDeleted(true);
         throw new Error('Record unavailable.');
+      }
+      if (res.status === 403) {
+        throw new Error('Unauthorized: Invalid tracking token.');
       }
       if (!res.ok) {
         throw new Error('Complaint not found.');
