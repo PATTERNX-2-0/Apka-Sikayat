@@ -38,8 +38,8 @@ export default function LandingPage() {
               <a href="#features" className="hover:text-[#FF9933] transition-colors">Features</a>
               <a href="#workflow" className="hover:text-[#FF9933] transition-colors">How It Works</a>
               <a href="#stats" className="hover:text-[#FF9933] transition-colors">Impact Analytics</a>
-              <Link href="/login" className="hover:text-[#1E3A8A] transition-colors">Sign In</Link>
-              <Link href="/register" className="px-4 py-2 rounded-xl bg-[#1E3A8A] text-white hover:bg-[#FF9933] transition-all shadow-sm">
+              <Link href="/login?type=citizen" className="hover:text-[#1E3A8A] transition-colors">Sign In</Link>
+              <Link href="/register?type=citizen" className="px-4 py-2 rounded-xl bg-[#1E3A8A] text-white hover:bg-[#FF9933] transition-all shadow-sm">
                 Register
               </Link>
             </div>
@@ -60,8 +60,8 @@ export default function LandingPage() {
             <a href="#workflow" onClick={() => setIsMobileMenuOpen(false)} className="block py-2 text-gray-600 font-medium">How It Works</a>
             <a href="#stats" onClick={() => setIsMobileMenuOpen(false)} className="block py-2 text-gray-600 font-medium">Impact Analytics</a>
             <div className="pt-2 border-t border-gray-100 flex flex-col space-y-2">
-              <Link href="/login" className="text-center py-2 text-gray-600 font-medium">Sign In</Link>
-              <Link href="/register" className="text-center py-2.5 rounded-xl bg-[#1E3A8A] text-white font-medium">Register</Link>
+              <Link href="/login?type=citizen" className="text-center py-2 text-gray-600 font-medium">Sign In</Link>
+              <Link href="/register?type=citizen" className="text-center py-2.5 rounded-xl bg-[#1E3A8A] text-white font-medium">Register</Link>
             </div>
           </motion.div>
         )}
@@ -84,10 +84,10 @@ export default function LandingPage() {
               Bridging the gap between citizens and administration through modern machine intelligence, real-time tracking, and automated institutional accountability.
             </p>
             <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
-              <Link href="/register" className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-[#FF9933] to-[#FFC266] text-white font-semibold shadow-lg shadow-[#FF9933]/20 hover:opacity-95 transition-all flex items-center justify-center group">
+              <Link href="/register?type=citizen" className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-[#FF9933] to-[#FFC266] text-white font-semibold shadow-lg shadow-[#FF9933]/20 hover:opacity-95 transition-all flex items-center justify-center group">
                 File a Complaint <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </Link>
-              <Link href="/login" className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-white border border-gray-200 text-[#1E3A8A] font-semibold hover:bg-gray-50 transition-all flex items-center justify-center">
+              <Link href="/login?type=official" className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-white border border-gray-200 text-[#1E3A8A] font-semibold hover:bg-gray-50 transition-all flex items-center justify-center">
                 Officer Portal Login
               </Link>
             </div>
