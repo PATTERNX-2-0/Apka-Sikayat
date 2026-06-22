@@ -306,7 +306,7 @@ async function handleWebhookEvent(req, res) {
                 conversationLog: []
             };
             await saveSession(from, session);
-            await sendReply(from, "Welcome to the CM Grievance Portal.\n\nI can help you register and track public grievances.\n\nLet's begin.\n\nWhat is your full name?");
+            await sendReply(from, "🇮🇳 Welcome to Apka Shikayat\n\nYour voice has the power to create change.\nReport issues, track resolutions, and help build a better tomorrow with transparent governance.\nI can help you register and track public grievances.\nLet's begin.\n\nWhat is your full name?");
             return;
         }
         // Handle completed session state
@@ -579,6 +579,10 @@ async function createComplaintFromSession(from, session) {
             accepted: true
         };
     }
+    const isCritical = aiResult?.severity === 'CRITICAL' ||
+        aiResult?.urgency === 'IMMEDIATE' ||
+        /accident|cyclone|harass|emergency|ambulance|police|fire/i.test(session.description || '');
+    const estResolution = isCritical ? 'Immediate Action Required (Emergency Services Alerted)' : '7 Working Days';
     const complaintId = await (0, urlHelper_1.generateNextComplaintId)();
     const trackingToken = (0, urlHelper_1.generateTrackingToken)();
     const shortToken = trackingToken.slice(0, 10);
@@ -594,7 +598,7 @@ async function createComplaintFromSession(from, session) {
         title: session.description.slice(0, 60),
         description: session.description,
         category: aiResult?.grievance_category || 'Civic Infrastructure',
-        priority: aiResult?.severity || 'MEDIUM',
+        priority: isCritical ? 'CRITICAL' : (aiResult?.severity || 'MEDIUM'),
         district: session.district,
         location: session.location,
         isAnonymous: false,
@@ -609,7 +613,8 @@ async function createComplaintFromSession(from, session) {
         currentStep: 1,
         aiValidation: aiResult,
         trackingToken,
-        trackingLink
+        trackingLink,
+        estResolution
     };
     // Save to database
     try {
@@ -650,42 +655,27 @@ async function createComplaintFromSession(from, session) {
     catch (smsErr) {
         console.error('[WhatsApp Webhook] Twilio SMS dispatch failed:', smsErr);
     }
-    // Step 12: WhatsApp Confirmation message (using custom template)
-    const waReply = `🇮🇳 *Grievance Registered Successfully*
+    // Step 12: Unified WhatsApp Confirmation message
+    const unifiedMsg = `Hello ${complaintData.citizenName},
 
-Hello ${complaintData.citizenName},
-
-Your complaint has been successfully submitted to the CM Grievance Portal.
-
-*Complaint ID*:
-${complaintId}
-
-*Current Status*:
-Submitted
-
-*Tracking Link*:
-${trackingLink}
-
-*Expected Resolution Timeline*:
-7 Working Days
-
-Thank you for reporting this issue. We will keep you updated on the progress.
-
-Chief Minister Governance Platform`;
-    await sendReply(from, waReply);
-    // Send exact final message closure (End Conversation After Success)
-    const finalMsg = `Your complaint has been successfully registered.
+Your grievance has been successfully registered.
 
 Complaint ID:
 ${complaintId}
 
+Current Status:
+Submitted
+
 Tracking Link:
 ${trackingLink}
 
+Expected Resolution Timeline:
+${estResolution}
+${isCritical ? '\n*Note*: Emergency services (Police / Ambulance) have been alerted for immediate assistance.\n' : ''}
 Thank you for using the CM Grievance Portal.
 
 Have a good day.`;
-    await sendReply(from, finalMsg);
+    await sendReply(from, unifiedMsg);
     session.state = 'COMPLETED';
     await saveSession(from, session);
     // Step 10: Trigger dashboard push notifications

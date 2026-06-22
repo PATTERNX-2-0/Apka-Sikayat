@@ -35,6 +35,79 @@ async function updateComplaintStatusInDb(complaintId, newStatus, updatedBy, cust
         timeline: []
     };
     if (!firebaseAdmin_1.isFirebaseAdminInitialized || !firebaseAdmin_1.adminDb) {
+        try {
+            const { db } = require('../../firebase');
+            const { doc, getDoc, updateDoc, collection, addDoc } = require('firebase/firestore');
+            const docRef = doc(db, 'complaints', complaintId);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                const complaintData = docSnap.data();
+                const stageIndex = exports.STAGES.findIndex(s => s.status === newStatus);
+                const newStep = stageIndex !== -1 ? stageIndex + 1 : (complaintData.currentStep || 1);
+                const currentDateString = new Date().toLocaleDateString('en-IN', {
+                    day: '2-digit', month: 'short', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit'
+                });
+                const existingTimeline = complaintData.timeline || [];
+                const timeline = exports.STAGES.map(stage => {
+                    const existingStep = existingTimeline.find((s) => s.step === stage.step);
+                    let date = existingStep?.date || null;
+                    if (stage.step <= newStep && !date) {
+                        date = currentDateString;
+                    }
+                    if (stage.step > newStep) {
+                        date = null;
+                    }
+                    return {
+                        step: stage.step,
+                        title: stage.title,
+                        iconName: stage.iconName,
+                        desc: stage.step === newStep && customNotes ? customNotes : stage.desc,
+                        date: date
+                    };
+                });
+                const updatedFields = {
+                    status: newStatus,
+                    currentStep: newStep,
+                    timeline: timeline,
+                    updatedAt: new Date().toISOString()
+                };
+                if (customNotes) {
+                    updatedFields.lastNotes = customNotes;
+                }
+                await updateDoc(docRef, updatedFields);
+                console.log(`[Event Service] Successfully updated complaint ${complaintId} in complaints collection via Client SDK.`);
+                // Add to grievance_events
+                const eventRef = collection(db, 'grievance_events');
+                const activeStage = exports.STAGES.find(s => s.status === newStatus);
+                const message = customNotes || activeStage?.desc || `Status updated to ${newStatus}`;
+                await addDoc(eventRef, {
+                    grievance_id: complaintId,
+                    status: newStatus,
+                    message: message,
+                    created_by: updatedBy,
+                    timestamp: new Date().toISOString()
+                });
+                const citizenUid = complaintData.uid || complaintData.citizen_id;
+                let phoneNumber = '+919999999999';
+                if (citizenUid) {
+                    const userDoc = await getDoc(doc(db, 'users', citizenUid));
+                    if (userDoc.exists()) {
+                        const uData = userDoc.data();
+                        phoneNumber = uData?.phone || uData?.phoneNumber || phoneNumber;
+                    }
+                }
+                const fullComplaint = {
+                    ...complaintData,
+                    ...updatedFields,
+                    phoneNumber
+                };
+                return { success: true, complaintData: fullComplaint };
+            }
+        }
+        catch (clientErr) {
+            console.warn(`[Event Service] Client SDK fallback update failed:`, clientErr.message);
+        }
         console.log(`[Event Service] [Simulation Mode] Updated Firestore mockup in-memory`);
         const targetStageIndex = exports.STAGES.findIndex(s => s.status === newStatus);
         const stepNum = targetStageIndex !== -1 ? targetStageIndex + 1 : 1;

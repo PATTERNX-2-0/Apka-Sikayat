@@ -137,9 +137,13 @@ app.post('/api/complaints/:id/status', async (req, res) => {
         // E. Automatically send WhatsApp update (Critical Bug Fix #9)
         try {
             const waStatus = status;
-            const waPhone = phoneNumber.replace(/[^0-9]/g, '');
-            const waTrackingUrl = reqTrackingLink || complaintData.trackingLink || complaintData.trackingUrl || `https://apka-sikayat.vercel.app/track/${id}`;
-            const waMsg = `*Complaint Update*
+            if (waStatus === 'Submitted') {
+                console.log(`[WhatsApp Status Update] Skipping duplicate Submitted status update message for ${id}`);
+            }
+            else {
+                const waPhone = phoneNumber.replace(/[^0-9]/g, '');
+                const waTrackingUrl = reqTrackingLink || complaintData.trackingLink || complaintData.trackingUrl || `https://apka-sikayat.vercel.app/track/${id}`;
+                const waMsg = `*Complaint Update*
 
 *Complaint ID*:
 ${id}
@@ -149,9 +153,10 @@ ${waStatus}
 
 *Track Here*:
 ${waTrackingUrl}`;
-            const { sendWhatsAppText } = require('./services/whatsappService');
-            await sendWhatsAppText(waPhone, waMsg);
-            console.log(`[WhatsApp Status Update] Sent status update to ${waPhone} for complaint ${id} (status: ${waStatus})`);
+                const { sendWhatsAppText } = require('./services/whatsappService');
+                await sendWhatsAppText(waPhone, waMsg);
+                console.log(`[WhatsApp Status Update] Sent status update to ${waPhone} for complaint ${id} (status: ${waStatus})`);
+            }
         }
         catch (waErr) {
             console.error('[WhatsApp Status Update] Failed to send WhatsApp status update:', waErr.message);
@@ -354,20 +359,46 @@ app.get('/api/complaints/track/:token', publicTrackRateLimiter, async (req, res)
             return res.status(200).json(docData);
         }
         else {
-            // Simulation mode fallback
-            return res.status(200).json({
-                id: "CMP-2026-001",
-                title: "Simulation Complaint",
-                category: "Water Supply",
-                description: "Waterlogging near sector 5",
-                status: "Submitted",
-                department: "PWD",
-                assignedOfficer: "A. K. Sharma",
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                currentStep: 1,
-                timeline: []
-            });
+            // Fallback to Client Firestore SDK to query the real database when Admin SDK is not initialized
+            try {
+                const { db } = require('../firebase');
+                const { doc: firestoreDoc, getDoc, collection, query, where, limit, getDocs } = require('firebase/firestore');
+                console.log(`[Tracking API] Admin SDK not initialized. Using Client SDK to fetch: ${token}`);
+                let docData = null;
+                // 1. Direct document look up
+                const docRef = firestoreDoc(db, 'complaints', token);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    docData = docSnap.data();
+                }
+                else {
+                    // 2. Query by trackingToken
+                    const qToken = query(collection(db, 'complaints'), where('trackingToken', '==', token), limit(1));
+                    const snapToken = await getDocs(qToken);
+                    if (!snapToken.empty) {
+                        docData = snapToken.docs[0].data();
+                    }
+                    else {
+                        // 3. Query by complaintId
+                        const qId = query(collection(db, 'complaints'), where('complaintId', '==', token), limit(1));
+                        const snapId = await getDocs(qId);
+                        if (!snapId.empty) {
+                            docData = snapId.docs[0].data();
+                        }
+                    }
+                }
+                if (docData) {
+                    if (docData.isDeleted || docData.status === 'Deleted') {
+                        return res.status(410).json({ error: 'Record unavailable.', isDeleted: true });
+                    }
+                    return res.status(200).json(docData);
+                }
+            }
+            catch (clientDbErr) {
+                console.error('[Tracking API] Client SDK fallback query failed:', clientDbErr.message);
+            }
+            // If still not found, return 404
+            return res.status(404).json({ error: 'Complaint not found.' });
         }
     }
     catch (error) {
