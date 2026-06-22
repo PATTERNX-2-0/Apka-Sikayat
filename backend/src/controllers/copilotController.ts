@@ -4,14 +4,13 @@ import { collection, getDocs, addDoc, query, where, orderBy, doc, setDoc } from 
 import { searchVectors } from '../services/pineconeService';
 import { generateVisitReport, generateSpeechPDF, generateBriefingPDF, generateCustomPDF, generateCMExecutiveReport } from '../services/pdfService';
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-
 /**
  * Helper to call Gemini Flash API
  */
 async function callGemini(systemPrompt: string, userMessage: string): Promise<string> {
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN || "";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
     const requestBody = {
       contents: [
         {
