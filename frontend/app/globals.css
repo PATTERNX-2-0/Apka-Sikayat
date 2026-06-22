@@ -1,1 +1,32 @@
 @import "tailwindcss";
+
+/* --- BULLETPROOF HIDE GOOGLE TRANSLATE DEFAULT UI --- */
+
+/* 1. Hides the top banner iframe completely, regardless of classes */
+iframe.goog-te-banner-frame,
+.goog-te-banner-frame {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+/* 2. Forces BOTH html and body to stay at the top and ignores Google's margins */
+html, body {
+    top: 0px !important; 
+    position: static !important; 
+    margin-top: 0px !important;
+    padding-top: 0px !important;
+}
+
+/* 3. Hides the original text popup box when hovering over translated words */
+#goog-gt-tt, 
+.goog-te-balloon-frame {
+    display: none !important; 
+    opacity: 0 !important;
+    visibility: hidden !important;
+}
+
+/* 4. Removes the yellow highlight background from translated text */
+.goog-text-highlight {
+    background-color: transparent !important;
+    box-shadow: none !important;
+}
