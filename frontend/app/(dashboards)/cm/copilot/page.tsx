@@ -464,8 +464,8 @@ ${context || "No direct matching issues found. Refer to general city administrat
         {/* Chat Header */}
         <div className="p-4 sm:p-5 border-b border-gray-100 bg-linear-to-r from-[#1E3A8A] to-[#0f172a] text-white flex justify-between items-center z-10 shrink-0">
           <div className="flex items-center">
-            <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center mr-3 backdrop-blur-md border border-white/20 shadow-inner shrink-0">
-              <Bot className="w-6 h-6 text-[#FF9933]" />
+            <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center mr-3 backdrop-blur-md border border-white/20 shadow-inner shrink-0 overflow-hidden">
+              <img src="/chatbot_logo.png" alt="AI Copilot Logo" className="w-8 h-8 object-contain" />
             </div>
             <div>
               <h2 className="font-black text-base sm:text-lg tracking-wide flex items-center">
@@ -500,8 +500,8 @@ ${context || "No direct matching issues found. Refer to general city administrat
             >
               {/* Bot Avatar for AI messages */}
               {msg.sender === 'ai' && (
-                <div className="w-8 h-8 rounded-full bg-[#1E3A8A]/10 flex items-center justify-center mr-2 sm:mr-3 shrink-0 mt-1 border border-[#1E3A8A]/20">
-                  <Bot className="w-4 h-4 text-[#1E3A8A]" />
+                <div className="w-8 h-8 rounded-full bg-[#1E3A8A]/10 flex items-center justify-center mr-2 sm:mr-3 shrink-0 mt-1 border border-[#1E3A8A]/20 overflow-hidden">
+                  <img src="/chatbot_logo.png" alt="AI Avatar" className="w-6 h-6 object-contain" />
                 </div>
               )}
 
@@ -587,8 +587,8 @@ ${context || "No direct matching issues found. Refer to general city administrat
           {/* Typing Indicator */}
           {isTyping && (
             <div className="flex justify-start">
-              <div className="w-8 h-8 rounded-full bg-[#1E3A8A]/10 flex items-center justify-center mr-2 sm:mr-3 shrink-0 mt-1 border border-[#1E3A8A]/20">
-                <Bot className="w-4 h-4 text-[#1E3A8A]" />
+              <div className="w-8 h-8 rounded-full bg-[#1E3A8A]/10 flex items-center justify-center mr-2 sm:mr-3 shrink-0 mt-1 border border-[#1E3A8A]/20 overflow-hidden">
+                <img src="/chatbot_logo.png" alt="AI Avatar" className="w-6 h-6 object-contain" />
               </div>
               <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-none p-4 shadow-sm flex items-center space-x-2">
                 <div className="w-2 h-2 bg-[#FF9933] rounded-full animate-bounce"></div>

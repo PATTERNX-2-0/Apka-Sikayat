@@ -34,7 +34,12 @@ import {
 } from './controllers/copilotController';
 
 // Load environment variables
-dotenv.config({ path: path.join(__dirname, '../../frontend/.env') });
+import fs from 'fs';
+let envPath = path.join(__dirname, '../../frontend/.env');
+if (!fs.existsSync(envPath)) {
+  envPath = path.join(__dirname, '../../../frontend/.env');
+}
+dotenv.config({ path: envPath });
 
 const app = express();
 const server = http.createServer(app);
@@ -157,7 +162,34 @@ app.post('/api/complaints/:id/status', async (req, res) => {
       });
     }
 
-    // D. Push event to Legacy Dashboard updates (via Socket.IO / queue worker)
+    // E. Automatically send WhatsApp update (Critical Bug Fix #9)
+    try {
+      const waStatus = status; 
+      if (waStatus === 'Submitted') {
+        console.log(`[WhatsApp Status Update] Skipping duplicate Submitted status update message for ${id}`);
+      } else {
+        const waPhone = phoneNumber.replace(/[^0-9]/g, '');
+        const waTrackingUrl = reqTrackingLink || complaintData.trackingLink || complaintData.trackingUrl || `https://apka-sikayat.vercel.app/track/${id}`;
+        
+        const waMsg = `*Complaint Update*
+
+*Complaint ID*:
+${id}
+
+*New Status*:
+${waStatus}
+
+*Track Here*:
+${waTrackingUrl}`;
+
+        const { sendWhatsAppText } = require('./services/whatsappService');
+        await sendWhatsAppText(waPhone, waMsg);
+        console.log(`[WhatsApp Status Update] Sent status update to ${waPhone} for complaint ${id} (status: ${waStatus})`);
+      }
+    } catch (waErr: any) {
+      console.error('[WhatsApp Status Update] Failed to send WhatsApp status update:', waErr.message);
+    }
+
     const legacyQueue = await initQueueService();
     await legacyQueue.addNotificationJob({
       complaintId: id,
@@ -344,47 +376,84 @@ function publicTrackRateLimiter(req: express.Request, res: express.Response, nex
 }
 
 // 5. Public API: Fetch Complaint by Tracking Token (No Authentication Required)
-app.get('/api/complaints/track/:token', publicTrackRateLimiter, async (req, res) => {
-  const { token } = req.params;
+app.get('/api/complaints/track/:complaintId', publicTrackRateLimiter, async (req, res) => {
+  const { complaintId } = req.params;
+  const token = req.query.token as string;
 
-  if (!token) {
-    return res.status(400).json({ error: 'Tracking token is required.' });
+  console.log(`[Tracking API] Request received - complaintId received: "${complaintId}"`);
+  console.log(`[Tracking API] Request received - token received: "${token}"`);
+
+  if (!complaintId) {
+    return res.status(400).json({ error: 'Complaint ID is required.' });
   }
 
   try {
+    let docData: any = null;
+
     if (isFirebaseAdminInitialized && adminDb) {
       const complaintsRef = adminDb.collection('complaints');
-      const snapshot = await complaintsRef.where('trackingToken', '==', token).limit(1).get();
-
-      if (snapshot.empty) {
-        // Fallback: Check if they passed a complaint ID directly (e.g. for backward compatibility)
-        const directDoc = await complaintsRef.doc(token).get();
-        if (directDoc.exists) {
-          return res.status(200).json(directDoc.data());
+      const directDoc = await complaintsRef.doc(complaintId).get();
+      if (directDoc.exists) {
+        docData = directDoc.data();
+      } else {
+        const snapshotId = await complaintsRef.where('complaintId', '==', complaintId).limit(1).get();
+        if (!snapshotId.empty) {
+          docData = snapshotId.docs[0].data();
         }
-        return res.status(404).json({ error: 'No complaint found matching this tracking token.' });
       }
-
-      const doc = snapshot.docs[0];
-      return res.status(200).json(doc.data());
-    } else {
-      // Simulation mode fallback
-      return res.status(200).json({
-        id: "CMP-2026-001",
-        title: "Simulation Complaint",
-        category: "Water Supply",
-        description: "Waterlogging near sector 5",
-        status: "Submitted",
-        department: "PWD",
-        assignedOfficer: "A. K. Sharma",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        currentStep: 1,
-        timeline: []
-      });
     }
+
+    // Try Client SDK fallback if not found or if Admin SDK not initialized
+    if (!docData) {
+      try {
+        const { db } = require('../firebase');
+        const { doc: firestoreDoc, getDoc, collection, query, where, limit, getDocs } = require('firebase/firestore');
+        const docRef = firestoreDoc(db, 'complaints', complaintId);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          docData = docSnap.data();
+        } else {
+          const qId = query(collection(db, 'complaints'), where('complaintId', '==', complaintId), limit(1));
+          const snapId = await getDocs(qId);
+          if (!snapId.empty) {
+            docData = snapId.docs[0].data();
+          }
+        }
+      } catch (clientDbErr: any) {
+        console.error('[Tracking API] Client SDK query failed:', clientDbErr.message);
+      }
+    }
+
+    if (!docData) {
+      console.log(`[Tracking API] Firestore document not found for complaintId: "${complaintId}"`);
+      return res.status(404).json({ error: 'Complaint not found.' });
+    }
+
+    console.log(`[Tracking API] Firestore document found for complaintId: "${complaintId}"`);
+
+    // Validate token against stored trackingToken
+    if (docData.trackingToken) {
+      const dbToken = docData.trackingToken;
+      const isValid = (token === dbToken) || 
+                      (dbToken.startsWith(token)) || 
+                      (token && dbToken.slice(0, 10) === token);
+
+      if (!isValid) {
+        console.log(`[Tracking API] token validation result: FAILED (Expected: ${dbToken}, Received: ${token})`);
+        return res.status(403).json({ error: 'Unauthorized: Invalid tracking token.' });
+      }
+      console.log(`[Tracking API] token validation result: SUCCESS`);
+    } else {
+      console.log(`[Tracking API] token validation result: BYPASSED (No tracking token stored)`);
+    }
+
+    if (docData.isDeleted || docData.status === 'Deleted') {
+      return res.status(410).json({ error: 'Record unavailable.', isDeleted: true });
+    }
+
+    return res.status(200).json(docData);
   } catch (error: any) {
-    console.error(`[API Server] Error fetching tracking data for token ${token}:`, error.message);
+    console.error(`[API Server] Error fetching tracking data for complaintId ${complaintId}:`, error.message);
     return res.status(500).json({ error: error.message || 'An error occurred.' });
   }
 });

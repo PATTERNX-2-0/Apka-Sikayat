@@ -141,23 +141,25 @@ export default function SubmitComplaintPage() {
 
     setIsSubmitting(true);
     try {
-      // Generate a unique, timestamp-based complaint ID that cannot collide with mock data
-      const now = new Date();
-      const datePart = now.toISOString().slice(0, 10).replace(/-/g, ''); // e.g. 20260620
-      const randPart = Math.floor(1000 + Math.random() * 9000);          // e.g. 4732
-      const complaintId = `CMP-${datePart}-${randPart}`;                 // e.g. CMP-20260620-4732
+      // Generate sequential complaint ID matching GRV-YYYY-XXXXXX
+      const { generateTrackingToken, getAppUrl, getBackendUrl, generateNextComplaintId } = require('@/lib/urlHelper');
+      const complaintId = await generateNextComplaintId();
 
       // Generate tracking token and link
-      const { generateTrackingToken, getAppUrl, getBackendUrl } = require('@/lib/urlHelper');
-      const trackingToken = generateTrackingToken();
       const appUrl = getAppUrl();
-      const trackingLink = `${appUrl}/track/${trackingToken}`;
+      const trackingToken = generateTrackingToken();
+      const shortToken = trackingToken.slice(0, 10);
+      const trackingLink = `${appUrl}/track/${complaintId}?token=${shortToken}`;
 
       const docRef = doc(db, "complaints", complaintId);
 
       const newComplaint = {
         id: complaintId,
+        complaintId: complaintId,
         uid: user.uid,
+        citizenName: profile?.fullName || user.displayName || user.email || "Citizen",
+        phoneNumber: profile?.phone || "",
+        email: user.email || "",
         title: data.title,
         description: data.description,
         category: data.category,
@@ -169,10 +171,14 @@ export default function SubmitComplaintPage() {
           address: data.location.address || `${data.district}, Delhi`
         },
         isAnonymous: data.isAnonymous || false,
-        status: "Pending",
+        status: "Submitted",
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         date: new Date().toISOString().split('T')[0],
         assignedOfficer: "Pending Assignment",
+        department: "Pending Assignment",
+        resolutionNotes: "",
+        trackingUrl: trackingLink,
         timeline: [
           { step: 1, title: "Complaint Submitted", date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }), desc: "Your complaint was received by the system.", iconName: "FileText" },
           { step: 2, title: "Assigned to Department", date: null, desc: "Awaiting routing to department.", iconName: "UserCheck" },

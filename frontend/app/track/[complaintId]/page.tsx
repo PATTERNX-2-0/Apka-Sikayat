@@ -1,12 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { 
-  FileText, UserCheck, Wrench, 
-  ShieldCheck, CheckCircle2, Lock, Clock, MapPin, Activity,
-  Building2, Calendar, FileCheck, User, Sparkles, AlertCircle, Info
+  FileText, ShieldCheck, Building2, Eye, Wrench, 
+  CheckCircle2, Lock, Clock, MapPin, Activity,
+  Calendar, User, AlertCircle, Info, HelpCircle
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 
@@ -14,13 +14,9 @@ const ICON_MAP: Record<string, any> = {
   FileText: FileText,
   ShieldCheck: ShieldCheck,
   Building2: Building2,
-  UserCheck: UserCheck,
-  Activity: Activity,
-  Calendar: Calendar,
-  FileCheck: FileCheck,
+  Eye: Eye,
   Wrench: Wrench,
   CheckCircle2: CheckCircle2,
-  User: User,
   Lock: Lock
 };
 
@@ -28,23 +24,33 @@ const STAGES = [
   { step: 1, title: 'Complaint Submitted', status: 'Submitted', desc: 'Your complaint was received by the system.', iconName: 'FileText' },
   { step: 2, title: 'AI Validation Completed', status: 'AI_Validated', desc: 'AI reviewed the complaint and verified authenticity.', iconName: 'ShieldCheck' },
   { step: 3, title: 'Assigned To Department', status: 'Assigned_Dept', desc: 'Complaint routed to the responsible department.', iconName: 'Building2' },
-  { step: 4, title: 'Officer Assigned', status: 'Officer_Assigned', desc: 'A specific resolving officer has been assigned.', iconName: 'UserCheck' },
-  { step: 5, title: 'Investigation Started', status: 'Investigation_Started', desc: 'The department has started reviewing your complaint details.', iconName: 'Activity' },
-  { step: 6, title: 'Field Inspection Scheduled', status: 'Inspection_Scheduled', desc: 'A field visit has been scheduled to inspect the site.', iconName: 'Calendar' },
-  { step: 7, title: 'Field Inspection Completed', status: 'Inspection_Completed', desc: 'Site inspection completed by the assigned officer.', iconName: 'FileCheck' },
-  { step: 8, title: 'Action In Progress', status: 'Action_In_Progress', desc: 'Department team has started resolving the issue at the site.', iconName: 'Wrench' },
-  { step: 9, title: 'Issue Resolved', status: 'Resolved', desc: 'The department has resolved the issue. Awaiting citizen verification.', iconName: 'CheckCircle2' },
-  { step: 10, title: 'Citizen Verification', status: 'Citizen_Verified', desc: 'Citizen confirmed and verified the resolution.', iconName: 'User' },
-  { step: 11, title: 'Complaint Closed', status: 'Closed', desc: 'The complaint has been successfully resolved and closed.', iconName: 'Lock' }
+  { step: 4, title: 'Under Review', status: 'Under_Review', desc: 'An officer is reviewing and evaluating details of the grievance.', iconName: 'Eye' },
+  { step: 5, title: 'Action In Progress', status: 'Action_In_Progress', desc: 'Department team has started resolving the issue at the site.', iconName: 'Wrench' },
+  { step: 6, title: 'Resolved', status: 'Resolved', desc: 'The issue has been resolved. Awaiting final verification.', iconName: 'CheckCircle2' },
+  { step: 7, title: 'Closed', status: 'Closed', desc: 'The complaint has been successfully resolved and closed.', iconName: 'Lock' }
 ];
 
-export default function PublicTrackingPage() {
+function mapStepTo7Stages(status: string, currentStep: number): number {
+  const s = (status || '').toLowerCase();
+  if (s === 'closed' || currentStep >= 11) return 7;
+  if (s === 'resolved' || s === 'citizen_verified' || currentStep >= 9) return 6;
+  if (s === 'action_in_progress' || currentStep >= 8) return 5;
+  if (s === 'officer_assigned' || s === 'investigation_started' || s === 'inspection_scheduled' || s === 'inspection_completed' || currentStep >= 4) return 4;
+  if (s === 'assigned_dept' || currentStep >= 3) return 3;
+  if (s === 'ai_validated' || currentStep >= 2) return 2;
+  return 1;
+}
+
+export default function PublicTrackingPageById() {
   const params = useParams();
-  const trackingToken = params?.trackingToken as string;
+  const searchParams = useSearchParams();
+  const complaintId = params?.complaintId as string;
+  const token = searchParams?.get('token') || '';
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isDeleted, setIsDeleted] = useState(false);
   const [socketStatus, setSocketStatus] = useState<'connected' | 'disconnected'>('disconnected');
   const socketRef = useRef<Socket | null>(null);
 
@@ -64,12 +70,19 @@ export default function PublicTrackingPage() {
   const backendUrl = getBackendUrl();
 
   const fetchComplaintDetails = async () => {
-    if (!trackingToken) return;
+    if (!complaintId) return;
     try {
       setLoading(true);
-      const res = await fetch(`${backendUrl}/api/complaints/track/${trackingToken}`);
+      const res = await fetch(`${backendUrl}/api/complaints/track/${complaintId}?token=${token}`);
+      if (res.status === 410) {
+        setIsDeleted(true);
+        throw new Error('Record unavailable.');
+      }
+      if (res.status === 403) {
+        throw new Error('Unauthorized: Invalid tracking token.');
+      }
       if (!res.ok) {
-        throw new Error('Complaint not found or invalid tracking link.');
+        throw new Error('Complaint not found.');
       }
       const val = await res.json();
       setData(val);
@@ -84,11 +97,11 @@ export default function PublicTrackingPage() {
 
   useEffect(() => {
     fetchComplaintDetails();
-  }, [trackingToken]);
+  }, [complaintId]);
 
   // Connect to Socket.IO Room
   useEffect(() => {
-    if (!trackingToken) return;
+    if (!complaintId) return;
 
     const socket = io(backendUrl, {
       transports: ['websocket', 'polling'],
@@ -99,13 +112,13 @@ export default function PublicTrackingPage() {
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      console.log('[Socket.IO] Public tracker connected');
+      console.log('[Socket.IO] Public tracker connected by ID:', complaintId);
       setSocketStatus('connected');
-      socket.emit('track_complaint_by_token', trackingToken);
+      socket.emit('track_complaint', complaintId);
       
-      // Also join by complaint ID if already loaded
-      if (data?.id) {
-        socket.emit('track_complaint', data.id);
+      // Also join using tracking token if available in data
+      if (data?.trackingToken) {
+        socket.emit('track_complaint_by_token', data.trackingToken);
       }
     });
 
@@ -123,7 +136,7 @@ export default function PublicTrackingPage() {
           status: payload.status,
           currentStep: payload.currentStep,
           timeline: payload.timeline,
-          lastNotes: payload.notes
+          resolutionNotes: payload.notes
         };
       });
     });
@@ -131,7 +144,7 @@ export default function PublicTrackingPage() {
     return () => {
       socket.disconnect();
     };
-  }, [trackingToken, data?.id]);
+  }, [complaintId, data?.trackingToken]);
 
   // Helper to determine step status
   const getStepStatus = (stepIndex: number, currentStep: number) => {
@@ -140,23 +153,20 @@ export default function PublicTrackingPage() {
     return 'pending';
   };
 
-  // Generate dynamic 11-stage layout
-  const getDisplayTimeline = () => {
+  // Generate dynamic 7-stage layout
+  const getDisplayTimeline = (currentMappedStep: number) => {
     if (!data) return [];
-    
-    if (data.timeline && data.timeline.length === 11) {
-      return data.timeline;
-    }
     
     const fallbackDate = new Date(data.createdAt || Date.now()).toLocaleDateString('en-IN', {
       day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
     });
     
     return STAGES.map(stage => {
-      const existing = (data.timeline || []).find((t: any) => t.step === stage.step);
-      let dateValue = existing?.date || null;
-      if (stage.step <= data.currentStep && !dateValue) {
-        dateValue = stage.step === 1 ? fallbackDate : "Completed";
+      let dateValue = null;
+      if (stage.step === 1) {
+        dateValue = fallbackDate;
+      } else if (stage.step <= currentMappedStep) {
+        dateValue = "Completed";
       }
       return {
         ...stage,
@@ -176,14 +186,28 @@ export default function PublicTrackingPage() {
     );
   }
 
+  if (isDeleted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
+        <div className="max-w-md w-full bg-white p-8 rounded-2xl border border-gray-100 shadow-sm text-center">
+          <AlertCircle className="w-16 h-16 mx-auto text-red-500 mb-4 animate-bounce" />
+          <h3 className="text-xl font-bold text-[#1E3A8A]">Record unavailable.</h3>
+          <p className="text-gray-500 mt-2">
+            This grievance has been deleted or archived by system administrators.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (error || !data) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
         <div className="max-w-md w-full bg-white p-8 rounded-2xl border border-gray-100 shadow-sm text-center">
           <AlertCircle className="w-16 h-16 mx-auto text-red-500 mb-4" />
-          <h3 className="text-xl font-bold text-[#1E3A8A]">Grievance Not Found</h3>
+          <h3 className="text-xl font-bold text-[#1E3A8A]">Complaint not found.</h3>
           <p className="text-gray-500 mt-2">
-            {error || "The tracking link is invalid or the complaint does not exist in our ledger."}
+            The complaint ID does not exist in our ledger system.
           </p>
           <div className="mt-6">
             <button 
@@ -198,6 +222,8 @@ export default function PublicTrackingPage() {
     );
   }
 
+  const currentMappedStep = mapStepTo7Stages(data.status, data.currentStep);
+
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -206,9 +232,9 @@ export default function PublicTrackingPage() {
         <div className="bg-[#E0F2FE] border border-sky-100 p-4 rounded-2xl flex items-start gap-3">
           <Info className="w-5 h-5 text-sky-600 shrink-0 mt-0.5" />
           <div>
-            <h4 className="text-sm font-bold text-sky-900">Secure Guest Tracker Portal</h4>
+            <h4 className="text-sm font-bold text-sky-900">Secure Public Tracker Portal</h4>
             <p className="text-xs text-sky-700 mt-0.5">
-              You are viewing this grievance live timeline via a cryptographically secure token. No authentication or login is required to monitor this complaint.
+              You are viewing this grievance live timeline directly via the public complaint portal. No login is required. Only public non-sensitive data is exposed here.
             </p>
           </div>
         </div>
@@ -229,7 +255,7 @@ export default function PublicTrackingPage() {
           <div className="text-right">
             <span className="text-xs font-medium text-gray-400 block uppercase">Complaint ID</span>
             <span className="text-lg font-extrabold text-[#FF9933] bg-[#FF9933]/10 px-3.5 py-1 rounded-lg border border-[#FF9933]/20 mt-1 inline-block">
-              {data.id}
+              {data.complaintId || data.id}
             </span>
           </div>
         </div>
@@ -314,20 +340,17 @@ export default function PublicTrackingPage() {
                   </div>
                 </div>
 
-                {data.aiValidation && (
-                  <div className="bg-[#E0F2FE]/40 p-3 rounded-xl border border-sky-100 flex gap-2.5 mt-4">
-                    <Sparkles className="w-4.5 h-4.5 text-sky-600 flex-shrink-0 mt-0.5 animate-pulse" />
-                    <div>
-                      <p className="text-[10px] font-bold text-sky-900 uppercase">AI Verification Safeguard</p>
-                      <p className="text-[11px] text-sky-800 mt-0.5">Authenticity verified: {data.aiValidation.confidence}% score.</p>
-                    </div>
+                {data.resolutionNotes && (
+                  <div className="border-t border-gray-100 pt-4">
+                    <label className="text-xs font-medium text-gray-400 uppercase tracking-wider block">Resolution Notes</label>
+                    <p className="text-sm font-semibold text-gray-800 bg-emerald-50/50 p-3 rounded-xl border border-emerald-100 mt-1 whitespace-pre-line">{data.resolutionNotes}</p>
                   </div>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Right Column: Flipkart-style 11-stage vertical timeline progress */}
+          {/* Right Column: vertical timeline progress (7 stages) */}
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-white p-6 sm:p-8 rounded-2xl border border-gray-100 shadow-sm">
               <h3 className="text-lg font-bold text-[#1E3A8A] mb-8 flex items-center">
@@ -342,16 +365,16 @@ export default function PublicTrackingPage() {
                 <div 
                   className="absolute left-6 top-6 w-0.5 bg-emerald-500 transition-all duration-1000 ease-in-out" 
                   style={{ 
-                    height: data.currentStep <= 1 
+                    height: currentMappedStep <= 1 
                       ? '0%' 
-                      : `${((data.currentStep - 1) / (11 - 1)) * 100}%` 
+                      : `${((currentMappedStep - 1) / (7 - 1)) * 100}%` 
                   }}
                 />
 
                 <div className="space-y-8 relative">
-                  {getDisplayTimeline().map((item: any) => {
+                  {getDisplayTimeline(currentMappedStep).map((item: any) => {
                     const Icon = ICON_MAP[item.iconName] || FileText;
-                    const stepStatus = getStepStatus(item.step, data.currentStep);
+                    const stepStatus = getStepStatus(item.step, currentMappedStep);
 
                     return (
                       <div key={item.step} className="flex relative items-start group">
@@ -374,12 +397,12 @@ export default function PublicTrackingPage() {
                             <h4 className={`text-base font-bold transition-colors duration-500 ${
                               stepStatus === 'current' ? 'text-blue-600' : 'text-[#1E3A8A]'
                             }`}>
-                              {item.title}
-                              {stepStatus === 'current' && (
-                                <span className="inline-block ml-2 text-[10px] uppercase font-bold tracking-widest bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md border border-blue-200 animate-pulse">
-                                  Current Status
-                                </span>
-                              )}
+                               {item.title}
+                               {stepStatus === 'current' && (
+                                 <span className="inline-block ml-2 text-[10px] uppercase font-bold tracking-widest bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md border border-blue-200 animate-pulse">
+                                   Current Status
+                                 </span>
+                               )}
                             </h4>
                             {item.date && (
                               <span className="text-[11px] font-semibold text-gray-400 bg-gray-50 border border-gray-100 px-2.5 py-1 rounded-lg">

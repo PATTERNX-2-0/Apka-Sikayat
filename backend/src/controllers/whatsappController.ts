@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { isFirebaseAdminInitialized, adminDb } from '../config/firebaseAdmin';
 import { sendWhatsAppText, downloadWhatsAppMedia } from '../services/whatsappService';
 import { validateGrievance } from '../services/grievanceValidator';
-import { generateTrackingToken, getAppUrl, getBackendUrl } from '../services/urlHelper';
+import { generateTrackingToken, getAppUrl, getBackendUrl, generateNextComplaintId } from '../services/urlHelper';
 import { sendTwilioSMS } from '../services/twilioService';
 import { db } from '../../firebase';
 import { doc, getDoc, setDoc, addDoc, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
@@ -110,7 +110,7 @@ async function transcribeVoiceNote(base64Audio: string, mimeType: string): Promi
 
   const rawBase64 = base64Audio.includes('base64,') ? base64Audio.split('base64,')[1] : base64Audio;
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-  
+
   const requestBody = {
     contents: [
       {
@@ -138,8 +138,129 @@ async function transcribeVoiceNote(base64Audio: string, mimeType: string): Promi
 }
 
 /**
+ * Extract clean person name using Gemini entity extraction
+ */
+async function extractCleanName(text: string): Promise<string | null> {
+  const apiKey = process.env.WHATSAPP_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
+  if (!apiKey) return null;
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const systemPrompt = `You are a precise entity extraction engine. Your task is to extract ONLY the clean full name of a person from the user input.
+Remove all conversational prefixes (like "My name is", "I am", "Amer nam", "Amer name", "Mera naam", "I'm", "myself", "This is", "bolchhi").
+Examples:
+Input: "My name is Ramesh Mallik" -> Output: "Ramesh Mallik"
+Input: "Amer nam Ramesh Mallik" -> Output: "Ramesh Mallik"
+Input: "I am Ramesh Mallik" -> Output: "Ramesh Mallik"
+Input: "Amer name ratul saha" -> Output: "Ratul Saha"
+Input: "Hi my name is Amit" -> Output: "Amit"
+
+If no name is present in the input, return "null". Output ONLY the clean name or "null" - do not include any other words or punctuation.`;
+
+  const requestBody = {
+    contents: [
+      {
+        parts: [{ text: `${systemPrompt}\n\nInput: "${text}"` }]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.0
+    }
+  };
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const result = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (result && result.toLowerCase() !== 'null') {
+      return result;
+    }
+    return null;
+  } catch (err) {
+    console.error('Error in extractCleanName:', err);
+    return null;
+  }
+}
+
+/**
+ * Analyze uploaded media (image, video, document, etc.) using Gemini
+ */
+async function analyzeUploadedMedia(base64Data: string, mimeType: string): Promise<string> {
+  const apiKey = process.env.WHATSAPP_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
+  if (!apiKey) return 'No API key configured for media analysis.';
+
+  const rawBase64 = base64Data.includes('base64,') ? base64Data.split('base64,')[1] : base64Data;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+  const requestBody = {
+    contents: [
+      {
+        parts: [
+          { text: "Analyze the uploaded media (image, video, document) and describe the public grievance or issue shown or described in it. Be specific but keep it to one or two short sentences." },
+          { inlineData: { mimeType, data: rawBase64 } }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.1
+    }
+  };
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    if (!response.ok) return 'Media analysis failed.';
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'No description could be generated from the evidence.';
+  } catch (err) {
+    console.error('[WhatsApp Webhook] Media analysis error:', err);
+    return 'Error analyzing media evidence.';
+  }
+}
+
+/**
  * incoming webhook handler
  */
+async function callGemini(systemPrompt: string, userMessage: string): Promise<string> {
+  const GEMINI_API_KEY = process.env.WHATSAPP_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const requestBody = {
+      contents: [
+        {
+          parts: [{ text: `${systemPrompt}\n\nUser Query: ${userMessage}` }]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.1
+      }
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gemini response failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Unable to generate response.';
+  } catch (err: any) {
+    console.error('[Gemini API Helper] Error calling Gemini Flash:', err.message);
+    return 'Systems are currently busy. Please try asking again in a moment.';
+  }
+}
+
 export async function handleWebhookEvent(req: Request, res: Response) {
   const body = req.body;
   if (body.object !== 'whatsapp_business_account') {
@@ -158,7 +279,7 @@ export async function handleWebhookEvent(req: Request, res: Response) {
   const from = message.from;
   const textBody = message.text?.body?.trim() || '';
 
-  // Get active session
+  // Get active session strictly isolated by phoneNumber
   let session: any = null;
   try {
     const sessionDocRef = doc(db, 'whatsapp_sessions', from);
@@ -187,239 +308,286 @@ export async function handleWebhookEvent(req: Request, res: Response) {
   }
 
   try {
-    // START Greeting Check
-    const isGreeting = ['hi', 'hello', 'complaint', 'help', 'hey', 'start'].includes(textBody.toLowerCase());
+    const queryLower = textBody.toLowerCase();
+    const isThankYou = queryLower.includes('thank') || queryLower.includes('thx') || queryLower === 'thanks';
+    if (isThankYou) {
+      await sendReply(from, "🇮🇳 You're welcome! Glad to assist you. Apka Shikayat is always here to support transparent governance. Have a wonderful day ahead!");
+      await deleteSession(from);
+      return;
+    }
+    const isGreeting = ['hi', 'hello', 'hey', 'start', 'restart', 'new complaint'].includes(queryLower);
 
-    if (!session) {
-      if (isGreeting) {
-        session = { state: 'START', phone: from };
+    // Initialize or reset session (always start a fresh onboarding flow on greeting reset)
+    if (!session || isGreeting) {
+      session = {
+        state: 'COLLECTING_NAME',
+        phone: from,
+        conversationLog: []
+      };
+      await saveSession(from, session);
+      await sendReply(
+        from,
+        "🇮🇳 Welcome to Apka Shikayat\n\nYour voice has the power to create change.\nReport issues, track resolutions, and help build a better tomorrow with transparent governance.\nI can help you register and track public grievances.\nLet's begin.\n\nWhat is your full name?"
+      );
+      return;
+    }
+
+    // Handle completed session state
+    if (session.state === 'COMPLETED') {
+      await sendReply(
+        from,
+        "Your complaint has been successfully registered. If you would like to report another issue, please type *Hi*, *Start*, or *New Complaint* to begin a new session."
+      );
+      return;
+    }
+
+    // Process Voice Notes, Media, and Location
+    let userText = textBody;
+
+    if (message.type === 'audio' || message.type === 'voice') {
+      const audioId = message.audio?.id || message.voice?.id;
+      console.log('[WhatsApp Webhook] Voice Note Processed for:', from);
+      await sendReply(from, "🎙️ Processing voice note transcription...");
+      const media = await downloadWhatsAppMedia(audioId);
+      if (media) {
+        userText = await transcribeVoiceNote(media.dataUrl, media.mimeType);
+        if (userText.includes('failed') || userText.includes('busy') || userText.includes('not set') || !userText.trim()) {
+          await sendReply(from, "🎙️ Politely, I was unable to transcribe your voice note clearly. Could you please record another voice note or type the details as text?");
+          return;
+        }
+        await sendReply(from, `Transcribed: "${userText}"`);
       } else {
-        // Send a polite greeting/help message instead of starting the registration wizard
-        await sendReply(from, "Hello! To register a new grievance, please reply with *Hi*, *Hello*, or *Complaint*.");
+        await sendReply(from, "🎙️ Politely, I was unable to retrieve your voice recording. Could you please try recording it again or typing it as text?");
         return;
       }
-    } else {
-      if (isGreeting) {
-        session.state = 'START';
+    } else if (message.type === 'image' || message.type === 'video' || message.type === 'document') {
+      const mediaId = message.image?.id || message.video?.id || message.document?.id;
+      console.log('[WhatsApp Webhook] Image Processed for:', from);
+      await sendReply(from, "📷 Analyzing uploaded evidence...");
+      const media = await downloadWhatsAppMedia(mediaId);
+      if (media) {
+        session.mediaDataUrl = media.dataUrl;
+        const analysis = await analyzeUploadedMedia(media.dataUrl, media.mimeType);
+        userText = `[Uploaded evidence attachment: ${analysis}]`;
+        await sendReply(from, `Evidence analyzed: "${analysis}"`);
       }
+    } else if (message.type === 'location') {
+      session.location = {
+        lat: message.location.latitude,
+        lng: message.location.longitude,
+        address: message.location.name || 'WhatsApp Shared Location'
+      };
+      userText = `[Shared Location Address: ${session.location.address}]`;
     }
 
-    // Step 1: Greeting & Welcome
-    if (session.state === 'START') {
-      session.state = 'COLLECT_NAME';
-      await saveSession(from, session);
-      await sendReply(from, "Welcome to the CM Grievance Portal.\nI can help you register and track public grievances.\n\nLet's begin.\nWhat is your full name?");
+    // Append to conversation log (conversational memory)
+    session.conversationLog = session.conversationLog || [];
+    session.conversationLog.push({ sender: 'user', text: userText });
+
+    // Onboarding Step 1: COLLECTING_NAME
+    if (session.state === 'COLLECTING_NAME') {
+      const cleanedName = await extractCleanName(userText);
+      if (cleanedName) {
+        session.fullName = cleanedName;
+        session.state = 'COLLECTING_EMAIL';
+        await saveSession(from, session);
+        await sendReply(from, "Please enter your email address.");
+      } else {
+        await sendReply(from, "I could not extract a valid full name. Please enter your full name to proceed:");
+      }
       return;
     }
 
-    // Step 2: Email Collection
-    if (session.state === 'COLLECT_NAME') {
-      if (!textBody) {
-        await sendReply(from, "Please reply with your full name:");
-        return;
+    // Onboarding Step 2: COLLECTING_EMAIL
+    if (session.state === 'COLLECTING_EMAIL') {
+      const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+      const emailMatch = userText.match(emailRegex);
+      if (emailMatch) {
+        session.email = emailMatch[0];
+        session.state = 'CONFIRMING_PHONE';
+        await saveSession(from, session);
+        await sendReply(
+          from,
+          `We detected your WhatsApp number:\n+${from}\n\nWould you like to use this number for updates?\n\nReply YES or NO.`
+        );
+      } else {
+        await sendReply(from, "Please enter a valid email address:");
       }
-      session.fullName = textBody;
-      session.state = 'COLLECT_EMAIL';
-      await saveSession(from, session);
-      await sendReply(from, `Thank you, ${textBody}.\n\nPlease enter your email address:`);
       return;
     }
 
-    if (session.state === 'COLLECT_EMAIL') {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!textBody || !emailRegex.test(textBody)) {
-        await sendReply(from, "❌ Invalid email format. Please enter a valid email address (e.g. name@example.com):");
-        return;
-      }
-      session.email = textBody;
-      session.state = 'CONFIRM_PHONE';
-      await saveSession(from, session);
-      await sendReply(from, `We detected your WhatsApp number:\n*+${from}*\n\nWould you like to use this number for tracking updates?\nReply *YES* or *NO*:`);
-      return;
-    }
-
-    // Step 3: Phone Collection
-    if (session.state === 'CONFIRM_PHONE') {
-      const ans = textBody.toLowerCase();
+    // Onboarding Step 3: CONFIRMING_PHONE
+    if (session.state === 'CONFIRMING_PHONE') {
+      const ans = queryLower.trim();
       if (ans === 'yes' || ans === 'y') {
         session.verifiedPhone = `+${from}`;
-        await proceedToProfileCreation(from, session);
+        session.state = 'CONFIRMING_PROFILE';
+        await saveSession(from, session);
+        await sendReply(
+          from,
+          `Name:\n${session.fullName}\n\nEmail:\n${session.email}\n\nPhone:\n${session.verifiedPhone}\n\nIs this information correct?\n\nReply YES or EDIT.`
+        );
       } else if (ans === 'no' || ans === 'n') {
-        session.state = 'COLLECT_ALT_PHONE';
+        session.state = 'ENTERING_PHONE';
         await saveSession(from, session);
-        await sendReply(from, "Please reply with your alternative mobile number (including country code, e.g. +91XXXXXXXXXX):");
+        await sendReply(from, "Please enter your preferred phone number for updates (including country code):");
       } else {
-        await sendReply(from, "Please reply with *YES* or *NO*:");
+        await sendReply(from, "Reply YES or NO.");
       }
       return;
     }
 
-    if (session.state === 'COLLECT_ALT_PHONE') {
-      if (!textBody || textBody.length < 8) {
-        await sendReply(from, "Please enter a valid mobile number with country code:");
-        return;
-      }
-      session.verifiedPhone = textBody;
-      await proceedToProfileCreation(from, session);
-      return;
-    }
-
-    // Step 5: Complaint Collection
-    if (session.state === 'COLLECT_GRIEVANCE_DESC') {
-      let description = '';
-
-      if (message.type === 'audio' || message.type === 'voice') {
-        const audioId = message.audio?.id || message.voice?.id;
-        await sendReply(from, "🎙️ Processing voice note transcription...");
-        const media = await downloadWhatsAppMedia(audioId);
-        if (media) {
-          description = await transcribeVoiceNote(media.dataUrl, media.mimeType);
-          await sendReply(from, `Transcribed text: "${description}"`);
-        } else {
-          await sendReply(from, "Failed to transcribe audio. Please enter your complaint description as text:");
-          return;
-        }
+    // Onboarding Step 3 (Alternate): ENTERING_PHONE
+    if (session.state === 'ENTERING_PHONE') {
+      const phoneClean = userText.replace(/[^0-9+]/g, '');
+      if (phoneClean.length >= 10) {
+        session.verifiedPhone = phoneClean.startsWith('+') ? phoneClean : `+${phoneClean}`;
+        session.state = 'CONFIRMING_PROFILE';
+        await saveSession(from, session);
+        await sendReply(
+          from,
+          `Name:\n${session.fullName}\n\nEmail:\n${session.email}\n\nPhone:\n${session.verifiedPhone}\n\nIs this information correct?\n\nReply YES or EDIT.`
+        );
       } else {
-        description = textBody;
+        await sendReply(from, "Please enter a valid phone number (including country code):");
       }
-
-      if (!description || description.length < 10) {
-        await sendReply(from, "Please describe your complaint in detail (minimum 10 characters):");
-        return;
-      }
-
-      session.description = description;
-      session.state = 'MEDIA_PROMPT';
-      await saveSession(from, session);
-      await sendReply(from, "Would you like to upload a photo or video related to this complaint?\nReply *YES* or *NO*:");
       return;
     }
 
-    // Step 6: Media upload check
-    if (session.state === 'MEDIA_PROMPT') {
-      const ans = textBody.toLowerCase();
+    // Onboarding Step 4: CONFIRMING_PROFILE (Profile Confirmation YES/EDIT)
+    if (session.state === 'CONFIRMING_PROFILE') {
+      const ans = queryLower.trim();
       if (ans === 'yes' || ans === 'y') {
-        session.state = 'COLLECT_MEDIA';
+        session.profileConfirmed = true;
+        session.state = 'COLLECTING_INFO';
         await saveSession(from, session);
-        await sendReply(from, "Please upload/send the photo or video now:");
-      } else if (ans === 'no' || ans === 'n' || ans === 'skip') {
-        session.mediaDataUrl = null;
-        session.state = 'COLLECT_LOCATION';
+
+        // Profile is saved ONLY after YES confirmation
+        const userProfile = {
+          uid: `wa_${from}`,
+          fullName: session.fullName,
+          email: session.email,
+          phone: session.verifiedPhone || `+${from}`,
+          district: session.district || 'South West Delhi',
+          role: 'Citizen',
+          registrationSource: 'WhatsApp',
+          joinedDate: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+        };
+        try {
+          await setDoc(doc(db, 'users', `wa_${from}`), userProfile);
+          console.log('[WhatsApp Webhook] Profile Saved:', `wa_${from}`);
+        } catch (err: any) {
+          console.warn('[WhatsApp Webhook] Profile save failed:', err.message);
+        }
+
+        const nextPrompt = `Thank you for confirming your profile, *${session.fullName}*.\n\nPlease describe the issue or grievance you want to report today. (You can also send voice notes or upload photo/video evidence)`;
+        session.conversationLog.push({ sender: 'assistant', text: nextPrompt });
         await saveSession(from, session);
-        await sendReply(from, "Please share your Location (use WhatsApp's Location sharing feature, or reply with the address as text):");
+        await sendReply(from, nextPrompt);
+      } else if (ans === 'edit' || ans === 'no' || ans === 'n') {
+        session.fullName = undefined;
+        session.email = undefined;
+        session.state = 'COLLECTING_NAME';
+        session.profileConfirmed = false;
+        await saveSession(from, session);
+        await sendReply(from, "Let's correct your details. What is your full name?");
       } else {
-        await sendReply(from, "Please reply *YES* or *NO*:");
+        await sendReply(from, "Please reply YES to confirm or EDIT to change your details.");
       }
       return;
     }
 
-    if (session.state === 'COLLECT_MEDIA') {
-      if (message.type === 'image') {
-        const imageId = message.image?.id;
-        await sendReply(from, "Analyzing media evidence with AI...");
-        const media = await downloadWhatsAppMedia(imageId);
-        if (media) {
-          session.mediaDataUrl = media.dataUrl;
-          session.state = 'COLLECT_LOCATION';
-          await saveSession(from, session);
-          await sendReply(from, "Evidence accepted! Please share your Location (use WhatsApp's Location sharing feature, or reply with the address as text):");
-        } else {
-          await sendReply(from, "Failed to download media. Please upload the photo again, or reply *skip* to proceed without media:");
-        }
-      } else if (textBody.toLowerCase() === 'skip') {
-        session.mediaDataUrl = null;
-        session.state = 'COLLECT_LOCATION';
+    // Handle COMPLAINT REVIEW state
+    if (session.state === 'CONFIRMING_COMPLAINT') {
+      const ans = queryLower.trim();
+      if (ans === 'yes' || ans === 'y') {
+        session.citizenUid = `wa_${from}`;
+        session.verifiedPhone = session.verifiedPhone || `+${from}`;
+        await createComplaintFromSession(from, session);
+      } else if (ans === 'edit' || ans === 'no' || ans === 'n') {
+        session.state = 'COLLECTING_INFO';
+        session.description = undefined; // reset description to collect again
         await saveSession(from, session);
-        await sendReply(from, "Proceeding without media. Please share your Location (use WhatsApp's Location sharing feature, or reply with the address as text):");
+        await sendReply(from, "No problem. Let's update the complaint details. Please describe the grievance again in detail:");
       } else {
-        await sendReply(from, "Please send a photo attachment, or reply *skip*:");
+        await sendReply(from, "Please reply YES to submit the complaint or EDIT to modify it.");
       }
       return;
     }
 
-    // Step 8: Location Collection & Complaint Creation
-    if (session.state === 'COLLECT_LOCATION') {
-      let locationObj: any = null;
+    // Handle COLLECTING_INFO (Conversational Dialog Loop)
+    if (session.state === 'COLLECTING_INFO') {
+      const systemPrompt = `
+You are the AI Grievance Assistant for NCT Delhi.
+The user is conversing with you on WhatsApp to register a public grievance (e.g. road damage, waterlogging, streetlights, harassment, theft).
+Act like a polite, empathetic, and professional citizen support officer. Avoid robotic or template-style replies.
 
-      if (message.type === 'location') {
-        locationObj = {
-          lat: message.location.latitude,
-          lng: message.location.longitude,
-          address: message.location.name || 'WhatsApp Shared Location'
-        };
-      } else {
-        if (!textBody) {
-          await sendReply(from, "Please share a location pin, or reply with your address as text:");
-          return;
-        }
-        locationObj = {
-          lat: 28.6139,
-          lng: 77.2090,
-          address: textBody
-        };
+### Rules:
+1. Extract the following entities from the conversation history (specifically focusing on user inputs):
+   - "description": The details of the complaint. Deduce this from their messages or media description. If not yet provided, set to null.
+   - "category": The category ("Water Supply", "Road Maintenance", "Electricity", "Sanitation", "Safety", "Other"). If not yet provided, set to null.
+   - "district": The Delhi district (must be one of: "South West Delhi", "New Delhi", "Central Delhi", "East Delhi", "Shahdara", "North West Delhi"). If not yet provided, set to null.
+2. Ask follow-up questions naturally if information is missing (description, district). Do not ask for all missing details in a single query. Focus on one or two details first.
+3. If the user provides details out of order, handle it gracefully. Do not force a rigid form.
+4. Output your response ONLY as a JSON object matching this schema:
+{
+  "extracted": {
+    "description": "extracted description or null",
+    "category": "extracted category or null",
+    "district": "extracted district or null"
+  },
+  "reply": "your next conversational response to the user"
+}
+`;
+
+      const currentContext = `
+Conversation History:
+${session.conversationLog.map((l: any) => `${l.sender === 'user' ? 'Citizen' : 'Officer'}: ${l.text}`).join('\n')}
+
+Previously Extracted Details:
+Description: ${session.description || 'null'}
+Category: ${session.category || 'null'}
+District: ${session.district || 'null'}
+`;
+
+      const geminiReplyRaw = await callGemini(systemPrompt, currentContext);
+      let geminiData: any = {};
+      try {
+        const jsonMatch = geminiReplyRaw.match(/\{[\s\S]*\}/);
+        geminiData = JSON.parse(jsonMatch ? jsonMatch[0] : geminiReplyRaw);
+      } catch (err) {
+        console.error("Failed to parse Gemini dialog JSON:", geminiReplyRaw);
+        geminiData = { reply: "I understand. Could you please provide your details to proceed?" };
       }
 
-      session.location = locationObj;
-      await createComplaintFromSession(from, session);
-    }
+      // Merge newly extracted values
+      if (geminiData.extracted) {
+        const ext = geminiData.extracted;
+        if (ext.description && ext.description !== 'null') session.description = ext.description;
+        if (ext.category && ext.category !== 'null') session.category = ext.category;
+        if (ext.district && ext.district !== 'null') session.district = ext.district;
+      }
 
+      // Transition to COMPLAINT REVIEW if profile is confirmed and complaint info is complete
+      if (session.profileConfirmed && session.description && session.district) {
+        session.state = 'CONFIRMING_COMPLAINT';
+        await saveSession(from, session);
+        
+        const summaryMsg = `Complaint Category:\n${session.category || 'Other'}\n\nLocation:\n${session.district}\n\nDescription:\n${session.description}\n\nEvidence:\n${session.mediaDataUrl ? '1 Image Attached' : 'No Evidence Attached'}\n\nPriority:\n${session.priority || 'High'}\n\nSubmit Complaint?\n\nYES\nEDIT`;
+        await sendReply(from, summaryMsg);
+        return;
+      }
+
+      // Standard conversational reply
+      session.conversationLog.push({ sender: 'assistant', text: geminiData.reply });
+      await saveSession(from, session);
+      await sendReply(from, geminiData.reply);
+      return;
+    }
   } catch (error: any) {
     console.error('[WhatsApp Controller] Execution error:', error.message);
     await sendReply(from, "An error occurred while processing your request. Please try again.");
   }
-}
-
-/**
- * Step 4: Profile lookup and creation
- */
-async function proceedToProfileCreation(from: string, session: any) {
-  let userProfile: any = null;
-
-  try {
-    const usersQuery = query(collection(db, 'users'), where('phone', '==', session.verifiedPhone));
-    const snap = await getDocs(usersQuery);
-    if (!snap.empty) {
-      userProfile = snap.docs[0].data();
-    } else {
-      userProfile = localUsers.get(from);
-    }
-  } catch (err: any) {
-    console.warn('[WhatsApp Webhook] Firestore user profile query failed:', err.message);
-    userProfile = localUsers.get(from);
-  }
-
-  const defaultDistrict = 'South West Delhi';
-
-  if (!userProfile) {
-    const newUserUid = `wa_${from}`;
-    userProfile = {
-      uid: newUserUid,
-      fullName: session.fullName,
-      email: session.email,
-      phone: session.verifiedPhone,
-      district: defaultDistrict,
-      address: 'WhatsApp Registered Address',
-      role: 'Citizen',
-      registrationSource: 'WhatsApp',
-      joinedDate: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
-    };
-
-    try {
-      const userDocRef = doc(db, 'users', newUserUid);
-      await setDoc(userDocRef, userProfile);
-    } catch (err: any) {
-      console.warn('[WhatsApp Webhook] Firestore user profile create failed:', err.message);
-      localUsers.set(from, userProfile);
-    }
-    console.log(`[WhatsApp Webhook] Created new citizen profile for ${session.fullName}`);
-  }
-
-  session.district = userProfile.district;
-  session.citizenUid = userProfile.uid;
-  session.state = 'COLLECT_GRIEVANCE_DESC';
-  await saveSession(from, session);
-
-  await sendReply(from, `Profile registered!\n\nHello, *${userProfile.fullName}*. Please describe your complaint in detail. You may send text or voice notes:`);
 }
 
 /**
@@ -454,40 +622,54 @@ async function createComplaintFromSession(from: string, session: any) {
     };
   }
 
-  const now = new Date();
-  const datePart = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const randPart = Math.floor(1000 + Math.random() * 9000);
-  const complaintId = `CMP-WA-${datePart}-${randPart}`;
+  const isCritical = 
+    aiResult?.severity === 'CRITICAL' || 
+    aiResult?.urgency === 'IMMEDIATE' ||
+    /accident|cyclone|harass|emergency|ambulance|police|fire/i.test(session.description || '');
+
+  const estResolution = isCritical ? 'Immediate Action Required (Emergency Services Alerted)' : '7 Working Days';
+
+  const complaintId = await generateNextComplaintId();
 
   const trackingToken = generateTrackingToken();
+  const shortToken = trackingToken.slice(0, 10);
   const appUrl = getAppUrl();
-  const trackingLink = `${appUrl}/track/${trackingToken}`;
+  const trackingLink = `${appUrl}/track/${complaintId}?token=${shortToken}`;
 
   const complaintData = {
     id: complaintId,
+    complaintId: complaintId,
     uid: session.citizenUid,
+    citizenName: session.fullName || "Anonymous Citizen",
+    phoneNumber: session.verifiedPhone || "",
+    email: session.email || "",
     title: session.description.slice(0, 60),
     description: session.description,
     category: aiResult?.grievance_category || 'Civic Infrastructure',
-    priority: aiResult?.severity || 'MEDIUM',
+    priority: isCritical ? 'CRITICAL' : (aiResult?.severity || 'MEDIUM'),
     district: session.district,
     location: session.location,
     isAnonymous: false,
     status: "Submitted",
     createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     date: new Date().toISOString().split('T')[0],
     assignedOfficer: "Pending Assignment",
+    department: aiResult?.department || "PWD",
+    resolutionNotes: "",
+    trackingUrl: trackingLink,
     currentStep: 1,
     aiValidation: aiResult,
     trackingToken,
-    trackingLink
+    trackingLink,
+    estResolution
   };
 
   // Save to database
   try {
     const complaintDocRef = doc(db, 'complaints', complaintId);
     await setDoc(complaintDocRef, complaintData);
-    
+
     // Step 9: Store ai_analysis
     await addDoc(collection(db, 'ai_analysis'), {
       complaintId,
@@ -506,9 +688,6 @@ async function createComplaintFromSession(from: string, session: any) {
     console.warn('[WhatsApp Webhook] Firestore complaints save failed:', err.message);
   }
 
-  // Delete session
-  await deleteSession(from);
-
   // Step 11: Twilio SMS Confirmation
   const smsBody = `Dear Citizen, Your grievance has been successfully registered. Complaint ID: ${complaintId}. Track Your Complaint: ${trackingLink} - CM Grievance Portal`;
   try {
@@ -526,9 +705,30 @@ async function createComplaintFromSession(from: string, session: any) {
     console.error('[WhatsApp Webhook] Twilio SMS dispatch failed:', smsErr);
   }
 
-  // Step 12: WhatsApp Confirmation message
-  const waReply = `Your complaint has been successfully registered.\n\n*Complaint ID:* ${complaintId}\n*Category:* ${complaintData.category}\n*Assigned Department:* ${aiResult?.department || 'PWD'}\n\n*Track Here:* ${trackingLink}\n\nThank you for helping improve public services.`;
-  await sendReply(from, waReply);
+  // Step 12: Unified WhatsApp Confirmation message
+  const unifiedMsg = `Hello ${complaintData.citizenName},
+
+Your grievance has been successfully registered.
+
+Complaint ID:
+${complaintId}
+
+Current Status:
+Submitted
+
+Tracking Link:
+${trackingLink}
+
+Expected Resolution Timeline:
+${estResolution}
+${isCritical ? '\n*Note*: Emergency services (Police / Ambulance) have been alerted for immediate assistance.\n' : ''}
+Thank you for using the CM Grievance Portal.
+
+Have a good day.`;
+  await sendReply(from, unifiedMsg);
+
+  session.state = 'COMPLETED';
+  await saveSession(from, session);
 
   // Step 10: Trigger dashboard push notifications
   try {

@@ -27,7 +27,12 @@ const heatmapService_1 = require("./services/heatmapService");
 const briefingWorker_1 = require("./workers/briefingWorker");
 const copilotController_1 = require("./controllers/copilotController");
 // Load environment variables
-dotenv_1.default.config({ path: path_1.default.join(__dirname, '../../frontend/.env') });
+const fs_1 = __importDefault(require("fs"));
+let envPath = path_1.default.join(__dirname, '../../frontend/.env');
+if (!fs_1.default.existsSync(envPath)) {
+    envPath = path_1.default.join(__dirname, '../../../frontend/.env');
+}
+dotenv_1.default.config({ path: envPath });
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
 // Dynamic CORS configurations
@@ -134,7 +139,33 @@ app.post('/api/complaints/:id/status', async (req, res) => {
                 trackingLink: reqTrackingLink || complaintData.trackingLink
             });
         }
-        // D. Push event to Legacy Dashboard updates (via Socket.IO / queue worker)
+        // E. Automatically send WhatsApp update (Critical Bug Fix #9)
+        try {
+            const waStatus = status;
+            if (waStatus === 'Submitted') {
+                console.log(`[WhatsApp Status Update] Skipping duplicate Submitted status update message for ${id}`);
+            }
+            else {
+                const waPhone = phoneNumber.replace(/[^0-9]/g, '');
+                const waTrackingUrl = reqTrackingLink || complaintData.trackingLink || complaintData.trackingUrl || `https://apka-sikayat.vercel.app/track/${id}`;
+                const waMsg = `*Complaint Update*
+
+*Complaint ID*:
+${id}
+
+*New Status*:
+${waStatus}
+
+*Track Here*:
+${waTrackingUrl}`;
+                const { sendWhatsAppText } = require('./services/whatsappService');
+                await sendWhatsAppText(waPhone, waMsg);
+                console.log(`[WhatsApp Status Update] Sent status update to ${waPhone} for complaint ${id} (status: ${waStatus})`);
+            }
+        }
+        catch (waErr) {
+            console.error('[WhatsApp Status Update] Failed to send WhatsApp status update:', waErr.message);
+        }
         const legacyQueue = await (0, queueService_1.initQueueService)();
         await legacyQueue.addNotificationJob({
             complaintId: id,
@@ -299,45 +330,78 @@ function publicTrackRateLimiter(req, res, next) {
     next();
 }
 // 5. Public API: Fetch Complaint by Tracking Token (No Authentication Required)
-app.get('/api/complaints/track/:token', publicTrackRateLimiter, async (req, res) => {
-    const { token } = req.params;
-    if (!token) {
-        return res.status(400).json({ error: 'Tracking token is required.' });
+app.get('/api/complaints/track/:complaintId', publicTrackRateLimiter, async (req, res) => {
+    const { complaintId } = req.params;
+    const token = req.query.token;
+    console.log(`[Tracking API] Request received - complaintId received: "${complaintId}"`);
+    console.log(`[Tracking API] Request received - token received: "${token}"`);
+    if (!complaintId) {
+        return res.status(400).json({ error: 'Complaint ID is required.' });
     }
     try {
+        let docData = null;
         if (firebaseAdmin_1.isFirebaseAdminInitialized && firebaseAdmin_1.adminDb) {
             const complaintsRef = firebaseAdmin_1.adminDb.collection('complaints');
-            const snapshot = await complaintsRef.where('trackingToken', '==', token).limit(1).get();
-            if (snapshot.empty) {
-                // Fallback: Check if they passed a complaint ID directly (e.g. for backward compatibility)
-                const directDoc = await complaintsRef.doc(token).get();
-                if (directDoc.exists) {
-                    return res.status(200).json(directDoc.data());
-                }
-                return res.status(404).json({ error: 'No complaint found matching this tracking token.' });
+            const directDoc = await complaintsRef.doc(complaintId).get();
+            if (directDoc.exists) {
+                docData = directDoc.data();
             }
-            const doc = snapshot.docs[0];
-            return res.status(200).json(doc.data());
+            else {
+                const snapshotId = await complaintsRef.where('complaintId', '==', complaintId).limit(1).get();
+                if (!snapshotId.empty) {
+                    docData = snapshotId.docs[0].data();
+                }
+            }
+        }
+        // Try Client SDK fallback if not found or if Admin SDK not initialized
+        if (!docData) {
+            try {
+                const { db } = require('../firebase');
+                const { doc: firestoreDoc, getDoc, collection, query, where, limit, getDocs } = require('firebase/firestore');
+                const docRef = firestoreDoc(db, 'complaints', complaintId);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    docData = docSnap.data();
+                }
+                else {
+                    const qId = query(collection(db, 'complaints'), where('complaintId', '==', complaintId), limit(1));
+                    const snapId = await getDocs(qId);
+                    if (!snapId.empty) {
+                        docData = snapId.docs[0].data();
+                    }
+                }
+            }
+            catch (clientDbErr) {
+                console.error('[Tracking API] Client SDK query failed:', clientDbErr.message);
+            }
+        }
+        if (!docData) {
+            console.log(`[Tracking API] Firestore document not found for complaintId: "${complaintId}"`);
+            return res.status(404).json({ error: 'Complaint not found.' });
+        }
+        console.log(`[Tracking API] Firestore document found for complaintId: "${complaintId}"`);
+        // Validate token against stored trackingToken
+        if (docData.trackingToken) {
+            const dbToken = docData.trackingToken;
+            const isValid = (token === dbToken) ||
+                (dbToken.startsWith(token)) ||
+                (token && dbToken.slice(0, 10) === token);
+            if (!isValid) {
+                console.log(`[Tracking API] token validation result: FAILED (Expected: ${dbToken}, Received: ${token})`);
+                return res.status(403).json({ error: 'Unauthorized: Invalid tracking token.' });
+            }
+            console.log(`[Tracking API] token validation result: SUCCESS`);
         }
         else {
-            // Simulation mode fallback
-            return res.status(200).json({
-                id: "CMP-2026-001",
-                title: "Simulation Complaint",
-                category: "Water Supply",
-                description: "Waterlogging near sector 5",
-                status: "Submitted",
-                department: "PWD",
-                assignedOfficer: "A. K. Sharma",
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                currentStep: 1,
-                timeline: []
-            });
+            console.log(`[Tracking API] token validation result: BYPASSED (No tracking token stored)`);
         }
+        if (docData.isDeleted || docData.status === 'Deleted') {
+            return res.status(410).json({ error: 'Record unavailable.', isDeleted: true });
+        }
+        return res.status(200).json(docData);
     }
     catch (error) {
-        console.error(`[API Server] Error fetching tracking data for token ${token}:`, error.message);
+        console.error(`[API Server] Error fetching tracking data for complaintId ${complaintId}:`, error.message);
         return res.status(500).json({ error: error.message || 'An error occurred.' });
     }
 });

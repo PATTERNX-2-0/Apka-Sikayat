@@ -9,12 +9,28 @@ exports.generateBriefingPDF = generateBriefingPDF;
 exports.generateCustomPDF = generateCustomPDF;
 exports.generateCMExecutiveReport = generateCMExecutiveReport;
 const pdfkit_1 = __importDefault(require("pdfkit"));
+const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
+// Try multiple relative paths or absolute path from backend root to locate Ashok Stambh logo
+let logoPath = '';
+const pathsToTry = [
+    path_1.default.join(__dirname, '../assets/ashok_stambh_logo.png'), // src/services/ -> src/assets/
+    path_1.default.join(__dirname, '../../../src/assets/ashok_stambh_logo.png'), // dist/src/services/ -> src/assets/
+    path_1.default.join(process.cwd(), 'src/assets/ashok_stambh_logo.png'), // backend root -> src/assets/
+    path_1.default.join(process.cwd(), 'backend/src/assets/ashok_stambh_logo.png') // repo root -> backend/src/assets/
+];
+for (const p of pathsToTry) {
+    if (fs_1.default.existsSync(p)) {
+        logoPath = p;
+        break;
+    }
+}
 /**
  * Helper to convert PDF generation flow into a promise resolving to a Buffer
  */
 function createPDFBuffer(buildDoc) {
     return new Promise((resolve, reject) => {
-        const doc = new pdfkit_1.default({ margin: 50 });
+        const doc = new pdfkit_1.default({ margins: { top: 50, bottom: 80, left: 50, right: 50 } });
         const chunks = [];
         doc.on('data', (chunk) => chunks.push(chunk));
         doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -155,14 +171,68 @@ function generateCMExecutiveReport(data) {
         const drawPageHeader = (pageTitle) => {
             doc.fillColor(primaryColor).fontSize(10).font('Helvetica-Bold').text(pageTitle, 50, 30);
             doc.strokeColor('#E5E7EB').lineWidth(1).moveTo(50, 45).lineTo(550, 45).stroke();
-            doc.y = 60; // Set y cursor to start content at 60
         };
+        // Register dynamic page creation header/footer to avoid fixed spacing breaks
+        doc.on('pageAdded', () => {
+            const savedBottom = doc.page.margins.bottom;
+            doc.page.margins.bottom = 0; // Temporarily disable bottom margin to avoid infinite page break recursion
+            drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+            doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Confidential`, 50, 755, { align: 'center' });
+            doc.page.margins.bottom = savedBottom; // Restore bottom margin
+            doc.y = 65;
+        });
+        if (data.isComplaintsOnly) {
+            // --- PAGE 1: COVER PAGE ---
+            doc.fillColor(primaryColor).fontSize(24).font('Helvetica-Bold').text('Daily Grievance Ledger', { align: 'center' });
+            doc.moveDown(0.5);
+            if (logoPath) {
+                doc.image(logoPath, 265, 110, { width: 70 });
+            }
+            else {
+                doc.circle(300, 160, 35).fill(accentColor);
+                doc.fillColor('#FFFFFF').fontSize(11).font('Helvetica-Bold').text('GOVT', 260, 155, { width: 80, align: 'center' });
+            }
+            doc.x = 50;
+            doc.y = 220;
+            doc.fillColor(textColor).fontSize(13).font('Helvetica-Bold').text('Official Grievance Summary Ledger', { align: 'center' });
+            doc.moveDown(0.4);
+            doc.fontSize(10).font('Helvetica').text('Respected Chief Minister,\n\nThis document contains the official list of citizen complaints registered in the state system for the specified period. No automated analysis or recommendations are included in this ledger.', { align: 'center', width: 512, lineGap: 3 });
+            doc.moveDown(1.5);
+            doc.fontSize(9).font('Helvetica-Bold').text(`Ledger Date: ${data.currentDate}`, { align: 'center' });
+            doc.text(`Total Registered Complaints: ${data.total}`, { align: 'center' });
+            doc.text('Generated For: Honourable Chief Minister', { align: 'center' });
+            const savedBottomCover = doc.page.margins.bottom;
+            doc.page.margins.bottom = 0;
+            doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Confidential`, 50, 755, { align: 'center' });
+            doc.page.margins.bottom = savedBottomCover;
+            // --- PAGE 2: COMPLAINTS LIST ---
+            doc.addPage();
+            doc.fillColor(primaryColor).fontSize(14).font('Helvetica-Bold').text('Registered Complaints List', 50, doc.y);
+            doc.moveDown(0.5);
+            if (data.complaintsList && data.complaintsList.length > 0) {
+                data.complaintsList.forEach((c, index) => {
+                    doc.fillColor(textColor).fontSize(10).font('Helvetica-Bold').text(`${index + 1}. ID: ${c.id || 'N/A'} - ${c.title || 'Untitled'}`, { lineGap: 2 });
+                    doc.font('Helvetica').fontSize(9).text(`Description: ${c.description || 'N/A'}`, { indent: 15, lineGap: 2 });
+                    doc.text(`District: ${c.district || 'General'} | Department: ${c.department || 'General'} | Status: ${c.status || 'Pending'} | Priority: ${c.priority || 'Normal'} | Date: ${c.createdAtStr || 'N/A'}`, { indent: 15, lineGap: 2 });
+                    doc.moveDown(0.8);
+                });
+            }
+            else {
+                doc.fillColor(textColor).fontSize(10).text('No complaints registered for this period.');
+            }
+            return;
+        }
         // --- PAGE 1: COVER PAGE & GREETINGS ---
         doc.fillColor(primaryColor).fontSize(24).font('Helvetica-Bold').text('Chief Minister Executive Governance Report', { align: 'center' });
         doc.moveDown(0.5);
-        // Emblem Circle
-        doc.circle(300, 160, 35).fill(accentColor);
-        doc.fillColor('#FFFFFF').fontSize(11).font('Helvetica-Bold').text('GOVT', 260, 155, { width: 80, align: 'center' });
+        // Emblem Circle/Image
+        if (logoPath) {
+            doc.image(logoPath, 265, 110, { width: 70 });
+        }
+        else {
+            doc.circle(300, 160, 35).fill(accentColor);
+            doc.fillColor('#FFFFFF').fontSize(11).font('Helvetica-Bold').text('GOVT', 260, 155, { width: 80, align: 'center' });
+        }
         doc.x = 50;
         doc.y = 220;
         doc.fillColor(textColor).fontSize(13).font('Helvetica-Bold').text('Greeting Section', { align: 'center' });
@@ -172,10 +242,13 @@ function generateCMExecutiveReport(data) {
         doc.fontSize(9).font('Helvetica-Bold').text(`Report Date: ${data.currentDate}`, { align: 'center' });
         doc.text(`Generated At: ${data.currentTime}`, { align: 'center' });
         doc.text('Generated For: Honourable Chief Minister', { align: 'center' });
-        doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Confidential`, 50, 720, { align: 'center' });
-        // --- PAGE 2: SECTIONS 1 & 2 ---
+        // Temporarily clear bottom margin to prevent cover page footer from triggering page overflow
+        const savedBottomCover = doc.page.margins.bottom;
+        doc.page.margins.bottom = 0;
+        doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Confidential`, 50, 755, { align: 'center' });
+        doc.page.margins.bottom = savedBottomCover;
+        // --- PAGE 2: CONTENT CONTINUOUS FLOW ---
         doc.addPage();
-        drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
         drawSectionHeader('SECTION 1: Executive Summary');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
         doc.text(`Total Registered Complaints: ${data.total}`);
@@ -184,65 +257,61 @@ function generateCMExecutiveReport(data) {
         doc.text(`Escalated Complaints: ${data.escalated}`);
         doc.text(`Critical Complaints: ${data.critical}`);
         doc.text(`State Resolution Rate: ${data.resolutionRate}%`);
-        doc.text(`Citizen Satisfaction Score (CSAT): ${data.csat}/5.0`);
-        doc.text(`High Priority Cases: ${data.critical}`);
+        doc.text(`Citizen Satisfaction Score (CSAT): ${data.csat}`);
         doc.text(`Today's New Complaints: ${data.todayNew}`);
         doc.text(`Today's Resolved Complaints: ${data.todayResolved}`);
+        doc.moveDown(0.5);
+        doc.text(data.executiveSummaryText || 'No executive summary available.', { lineGap: 2 });
         doc.moveDown(1.2);
         drawSectionHeader('SECTION 2: Current Situation Overview');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
-        doc.text('What is happening today: Real-time monitors highlight active operations across all 11 districts.');
-        doc.text(`Major ongoing issues: Sewerage pipeline grids and local water sanitation backlogs represent the bulk of active reports.`);
-        doc.text('Major public concerns: Speed of resolution in seasonal hotspots.');
-        doc.text(`Most affected districts: South West Delhi and East Delhi represent the densest active nodes.`);
-        doc.text('Most affected departments: Delhi Jal Board (DJB) and Municipal Corporation (MCD).');
-        doc.text('Emergency situations: None declared. Grid pressure remaining within operational parameters.');
-        doc.text(`Critical alerts: ${data.critical} unresolved critical issues flagged for immediate department routing.`);
-        doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 2`, 50, 720, { align: 'center' });
-        // --- PAGE 3: SECTIONS 3 & 4 ---
-        doc.addPage();
-        drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+        doc.text(data.currentSituationText || 'No situation overview available.', { lineGap: 2 });
+        doc.moveDown(1.2);
         drawSectionHeader('SECTION 3: District Intelligence');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
-        doc.text(`Top Districts By Complaints: ${data.topDistricts.join(', ')}`);
-        doc.text(`Top Districts By Resolution Rate: ${data.topDistricts.join(', ')}`);
-        doc.text(`Worst Performing Districts: ${data.lowestDistricts.join(', ')}`);
-        doc.text(`Critical Districts: South West Delhi (High workload ratio)`);
-        doc.text('Heatmap Summary: Major hotspots identified around Dwarka Sector 5 and Preet Vihar.');
+        doc.text(`Top Districts By Complaints: ${data.topDistricts ? data.topDistricts.join(', ') : 'N/A'}`);
+        doc.text(`Worst Performing Districts: ${data.lowestDistricts ? data.lowestDistricts.join(', ') : 'N/A'}`);
         doc.moveDown(0.5);
         doc.font('Helvetica-Bold').text('District Breakdown:');
         doc.font('Helvetica');
-        data.districtList.forEach((d) => {
-            doc.text(` - ${d.name}: Total ${d.total} | Resolution Rate: ${d.rate}%`, { indent: 15 });
-        });
+        if (data.districtList && data.districtList.length > 0) {
+            data.districtList.forEach((d) => {
+                doc.text(` - ${d.name}: Total ${d.total} | Resolution Rate: ${d.rate}%`, { indent: 15 });
+            });
+        }
+        else {
+            doc.text('No district data available.', { indent: 15 });
+        }
+        doc.moveDown(0.5);
+        doc.text(data.districtAnalysisText || 'No district analysis available.', { lineGap: 2 });
         doc.moveDown(1.2);
         drawSectionHeader('SECTION 4: Department Intelligence');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
         doc.font('Helvetica-Bold').text('Department Performance Breakdown:');
         doc.font('Helvetica');
-        data.departmentList.forEach((dept) => {
-            doc.text(` - ${dept.name}: Total ${dept.total} | Resolution Rate: ${dept.rate}%`, { indent: 15 });
-        });
+        if (data.departmentList && data.departmentList.length > 0) {
+            data.departmentList.forEach((dept) => {
+                doc.text(` - ${dept.name}: Total ${dept.total} | Resolution Rate: ${dept.rate}%`, { indent: 15 });
+            });
+        }
+        else {
+            doc.text('No department data available.', { indent: 15 });
+        }
         doc.moveDown(0.5);
-        doc.text(`Department Workload: Delhi Jal Board and MCD handle over 65% of state grievances.`);
-        doc.text(`Department Backlogs: Cumulative pending backlog across all departments stands at ${data.pending} cases.`);
-        doc.text('Officer Performance: Zonal officers are tracking SLAs. Low rating flags are routed for inspection.');
-        doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 3`, 50, 720, { align: 'center' });
-        // --- PAGE 4: SECTIONS 5 & 6 ---
-        doc.addPage();
-        drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+        doc.text(data.departmentAnalysisText || 'No department analysis available.', { lineGap: 2 });
+        doc.moveDown(1.2);
         drawSectionHeader('SECTION 5: Pending Issues');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
         doc.font('Helvetica-Bold').text('High Priority Pending Issues Ledger:');
         doc.font('Helvetica');
         if (data.pendingList && data.pendingList.length > 0) {
             data.pendingList.forEach((c, index) => {
-                doc.text(`${index + 1}. Issue: ${c.title || c.description || 'N/A'}\n   Location: ${c.district || 'General'} | Department: ${c.department || 'N/A'} | Status: ${c.status || 'N/A'} | Risk: High`, { indent: 15 });
+                doc.text(`${index + 1}. Issue: ${c.title || c.description || 'N/A'}\n   Location: ${c.district || 'General'} | Department: ${c.department || 'N/A'} | Status: ${c.status || 'N/A'} | Priority: ${c.priority || 'N/A'}`, { indent: 15 });
                 doc.moveDown(0.3);
             });
         }
         else {
-            doc.text('No high-priority pending issues found.', { indent: 15 });
+            doc.text('No pending issues found.', { indent: 15 });
         }
         doc.moveDown(1.2);
         drawSectionHeader('SECTION 6: Resolved Issues');
@@ -258,58 +327,26 @@ function generateCMExecutiveReport(data) {
         else {
             doc.text('No recently resolved issues found.', { indent: 15 });
         }
-        doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 4`, 50, 720, { align: 'center' });
-        // --- PAGE 5: SECTIONS 7 & 8 ---
-        doc.addPage();
-        drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+        doc.moveDown(1.2);
         drawSectionHeader('SECTION 7: Critical Incidents');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
-        doc.text(`Women Safety Cases: ${data.womenSafety}`);
-        doc.text(`Corruption Cases: ${data.corruption}`);
-        doc.text(`Fraud Cases (False Resolution flags): ${data.auditFlags}`);
-        doc.text(`Public Safety Risks (Open wiring/road cavities): ${data.infrastructure}`);
-        doc.text(`Flood Risks (Drainage leaks): ${data.flood}`);
-        doc.text(`Health Emergencies: ${data.health}`);
-        doc.text('Environmental Hazards: Low air quality indexing warnings in select industrial sectors.');
+        doc.text(data.riskAnalysisText || 'No risk analysis available.', { lineGap: 2 });
         doc.moveDown(1.2);
         drawSectionHeader('SECTION 8: Audit Findings');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
-        doc.text(`Suspicious Activities: ${data.auditFlags} cases resolved with low citizen ratings (potential fake resolution).`);
-        doc.text(`Potential Fraud: Geofencing coordinates mismatch in resolved water pipeline leaks.`);
-        doc.text('Contractor Risks: Minor delays flagged in local road maintenance contracts.');
-        doc.text('Officer Risks: Two zonal offices show resolution rates below the 70% threshold.');
-        doc.text('Audit Recommendations: Implement mandatory on-site geofenced selfie verification for resolutions.');
-        doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 5`, 50, 720, { align: 'center' });
-        // --- PAGE 6: SECTIONS 9 & 10 ---
-        doc.addPage();
-        drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+        doc.text(data.auditFindingsText || 'No audit findings available.', { lineGap: 2 });
+        doc.moveDown(1.2);
         drawSectionHeader('SECTION 9: AI Governance Insights');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
-        doc.text('Complaint Trends: Sewer and water-related reports show a minor seasonal increase.');
-        doc.text(`Growth Trends: Steady overall state workload, resolved cases matching input velocity.`);
-        doc.text('Hotspots: Clusters localized in East Delhi and South West Delhi corridors.');
-        doc.text('Emerging Risks: Short-term utility network load increases during summer weeks.');
-        doc.text('Future Predictions: Backlogs projected to reduce by 10% next week.');
-        doc.text('Strategic Recommendations: Scale centralized field teams during peak complaint hours.');
+        doc.text(data.aiInsightsText || 'No AI governance insights available.', { lineGap: 2 });
         doc.moveDown(1.2);
         drawSectionHeader('SECTION 10: Chief Minister Action Brief');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
-        doc.text(`Immediate Actions Required: Direct inspection teams to review the ${data.auditFlags} audit-flagged cases.`);
-        doc.text('Priority Areas: MCD road maintenance timelines and water pipeline leaks.');
-        doc.text('Talking Points: Digital governance tracking, real-time SLAs, citizen feedback validation.');
-        doc.text('Citizen Concerns: Grid efficiency and municipal response accountability.');
-        doc.text('Recommended Executive Actions: Conduct review meeting with DJB and PWD Zonal Heads.');
-        doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 6`, 50, 720, { align: 'center' });
-        // --- PAGE 7: SECTION 11 & CONCLUSION ---
-        doc.addPage();
-        drawPageHeader('DELHI STATE EXECUTIVE GOVERNANCE AUDIT');
+        doc.text(data.cmBriefingText || 'No action brief available.', { lineGap: 2 });
+        doc.moveDown(1.2);
         drawSectionHeader('SECTION 11: Resource Allocation Recommendations');
         doc.fillColor(textColor).fontSize(9).font('Helvetica');
-        doc.text('Officer Redistribution: Deploy additional field monitors from low-load wards to South West Delhi.');
-        doc.text('Budget Reallocation: Shift emergency backup reserves to road restoration projects.');
-        doc.text('Emergency Funding: Allocate 50 Lakhs emergency funding for local water pipeline restorations.');
-        doc.text('Department Optimization: Integrate shared dashboard analytics between DJB and PWD.');
-        doc.text('Infrastructure Investments: Invest in smart geofenced resolution verification modules.');
+        doc.text(data.resourceAllocationText || 'No resource allocation recommendations available.', { lineGap: 2 });
         doc.moveDown(1.5);
         doc.strokeColor('#E5E7EB').lineWidth(1).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
         doc.moveDown(1.5);
@@ -318,6 +355,5 @@ function generateCMExecutiveReport(data) {
         doc.fillColor(textColor).fontSize(10).font('Helvetica').text('Prepared Automatically By:\nAI Governance Copilot\n\nGenerated Using Live Government Intelligence Systems', { align: 'center' });
         doc.moveDown(1);
         doc.fontSize(9).font('Helvetica-Bold').text(`Generation Time: ${data.currentTime}`, { align: 'center' });
-        doc.fillColor('#9CA3AF').fontSize(8).text(`Report ID: ${reportId} | Page 7`, 50, 720, { align: 'center' });
     });
 }
