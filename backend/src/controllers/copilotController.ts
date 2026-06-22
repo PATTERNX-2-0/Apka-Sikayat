@@ -44,7 +44,7 @@ async function callGemini(systemPrompt: string, userMessage: string): Promise<st
 /**
  * Reusable helper to fetch live Firestore records, calculate statistics, and run Gemini analysis.
  */
-async function compileCMExecutiveReportData(isTodayRequested: boolean, isComplaintsOnly: boolean): Promise<any> {
+async function compileCMExecutiveReportData(isTodayRequested: boolean, isComplaintsOnly: boolean, startDate?: string, endDate?: string): Promise<any> {
   const complaintsRef = collection(db, 'complaints');
   console.log('[Copilot Controller] Querying Firestore collection "complaints" in real-time...');
   const querySnap = await getDocs(complaintsRef);
@@ -80,6 +80,16 @@ async function compileCMExecutiveReportData(isTodayRequested: boolean, isComplai
       return dStr === todayStr || dStr === yesterdayStr;
     });
     console.log(`[Copilot Controller] Filtered down to ${complaints.length} complaints for the today-ledger request.`);
+  } else if (startDate || endDate) {
+    console.log(`[Copilot Controller] Filtering complaints by date range: ${startDate} to ${endDate}...`);
+    complaints = allComplaints.filter(c => {
+      const dStr = getComplaintDateStr(c.createdAt);
+      if (!dStr) return false;
+      if (startDate && dStr < startDate) return false;
+      if (endDate && dStr > endDate) return false;
+      return true;
+    });
+    console.log(`[Copilot Controller] Filtered down to ${complaints.length} complaints for the date range.`);
   }
 
   if (isComplaintsOnly) {
@@ -479,7 +489,7 @@ ${contextBlocks || "No active grievances found in the database."}
  */
 export async function handleCMExecutiveReportPDF(req: Request, res: Response) {
   try {
-    const { text, filename } = req.body;
+    const { text, filename, startDate, endDate } = req.body;
     let reportData: any = {};
     let isFullyDynamic = false;
 
@@ -500,7 +510,7 @@ export async function handleCMExecutiveReportPDF(req: Request, res: Response) {
       const isExecutive = filename && (filename.toLowerCase().includes('executive') || filename.toLowerCase().includes('governance'));
       const isComplaintsOnly = !isExecutive;
 
-      reportData = await compileCMExecutiveReportData(isToday, isComplaintsOnly);
+      reportData = await compileCMExecutiveReportData(isToday, isComplaintsOnly, startDate, endDate);
     }
 
     if (!reportData.currentDate) reportData.currentDate = new Date().toLocaleDateString('en-IN');

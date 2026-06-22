@@ -8,6 +8,8 @@ import {
   Loader2, Filter, Archive
 } from 'lucide-react';
 
+import { getBackendUrl } from '@/lib/urlHelper';
+
 // =========================================================================
 // MOCK DATA (For Generated Reports History)
 // =========================================================================
@@ -28,18 +30,50 @@ export default function CMReportsPage() {
   // =========================================================================
   const handleDownload = async (type: string, name: string) => {
     setGeneratingType(type);
-    
-    // API TODO: This is where you connect to your Node.js backend.
-    // Example: 
-    // const response = await axios.post('/api/cm/reports/generate', { type, dateRange }, { responseType: 'blob' });
-    // const url = window.URL.createObjectURL(new Blob([response.data]));
-    // const link = document.createElement('a'); link.href = url; link.setAttribute('download', `${name}.pdf`); document.body.appendChild(link); link.click();
-    
-    // Simulating backend PDF generation delay
-    setTimeout(() => {
-      setGeneratingType(null);
+    try {
+      const backendUrl = getBackendUrl();
+      const endpoint = `${backendUrl}/api/cm/copilot/generate-executive-report`;
+      
+      let filename = name;
+      if (type === 'COMBINED') {
+        filename = `${name}_Executive_Governance_Report`;
+      } else {
+        filename = `${name}_Report`;
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          filename,
+          startDate: dateRange.start || undefined,
+          endDate: dateRange.end || undefined
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate report');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${filename}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
       showToast(`${name} generated and downloaded successfully.`);
-    }, 2000);
+    } catch (error) {
+      console.error('Error downloading report:', error);
+      showToast(`Error generating ${name}. Please check backend connection.`);
+    } finally {
+      setGeneratingType(null);
+    }
   };
 
   const showToast = (msg: string) => {
@@ -196,7 +230,10 @@ export default function CMReportsPage() {
                     <span className="text-xs font-bold text-gray-500">{report.size}</span>
                   </td>
                   <td className="p-4 pr-6 text-right">
-                    <button className="text-[10px] font-black uppercase tracking-widest text-[#1E3A8A] hover:text-[#FF8C00] transition-colors">
+                    <button 
+                      onClick={() => handleDownload(report.type, report.title.replace(/\s+/g, '_'))}
+                      className="text-[10px] font-black uppercase tracking-widest text-[#1E3A8A] hover:text-[#FF8C00] transition-colors"
+                    >
                       Download Again
                     </button>
                   </td>

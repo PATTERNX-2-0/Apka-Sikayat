@@ -134,7 +134,28 @@ app.post('/api/complaints/:id/status', async (req, res) => {
                 trackingLink: reqTrackingLink || complaintData.trackingLink
             });
         }
-        // D. Push event to Legacy Dashboard updates (via Socket.IO / queue worker)
+        // E. Automatically send WhatsApp update (Critical Bug Fix #9)
+        try {
+            const waStatus = status;
+            const waPhone = phoneNumber.replace(/[^0-9]/g, '');
+            const waTrackingUrl = reqTrackingLink || complaintData.trackingLink || complaintData.trackingUrl || `https://apka-sikayat.vercel.app/track/${id}`;
+            const waMsg = `*Complaint Update*
+
+*Complaint ID*:
+${id}
+
+*New Status*:
+${waStatus}
+
+*Track Here*:
+${waTrackingUrl}`;
+            const { sendWhatsAppText } = require('./services/whatsappService');
+            await sendWhatsAppText(waPhone, waMsg);
+            console.log(`[WhatsApp Status Update] Sent status update to ${waPhone} for complaint ${id} (status: ${waStatus})`);
+        }
+        catch (waErr) {
+            console.error('[WhatsApp Status Update] Failed to send WhatsApp status update:', waErr.message);
+        }
         const legacyQueue = await (0, queueService_1.initQueueService)();
         await legacyQueue.addNotificationJob({
             complaintId: id,
@@ -307,17 +328,30 @@ app.get('/api/complaints/track/:token', publicTrackRateLimiter, async (req, res)
     try {
         if (firebaseAdmin_1.isFirebaseAdminInitialized && firebaseAdmin_1.adminDb) {
             const complaintsRef = firebaseAdmin_1.adminDb.collection('complaints');
-            const snapshot = await complaintsRef.where('trackingToken', '==', token).limit(1).get();
-            if (snapshot.empty) {
-                // Fallback: Check if they passed a complaint ID directly (e.g. for backward compatibility)
-                const directDoc = await complaintsRef.doc(token).get();
-                if (directDoc.exists) {
-                    return res.status(200).json(directDoc.data());
-                }
-                return res.status(404).json({ error: 'No complaint found matching this tracking token.' });
+            let docData = null;
+            const directDoc = await complaintsRef.doc(token).get();
+            if (directDoc.exists) {
+                docData = directDoc.data();
             }
-            const doc = snapshot.docs[0];
-            return res.status(200).json(doc.data());
+            else {
+                const snapshot = await complaintsRef.where('trackingToken', '==', token).limit(1).get();
+                if (!snapshot.empty) {
+                    docData = snapshot.docs[0].data();
+                }
+                else {
+                    const snapshotId = await complaintsRef.where('complaintId', '==', token).limit(1).get();
+                    if (!snapshotId.empty) {
+                        docData = snapshotId.docs[0].data();
+                    }
+                }
+            }
+            if (!docData) {
+                return res.status(404).json({ error: 'Complaint not found.' });
+            }
+            if (docData.isDeleted || docData.status === 'Deleted') {
+                return res.status(410).json({ error: 'Record unavailable.', isDeleted: true });
+            }
+            return res.status(200).json(docData);
         }
         else {
             // Simulation mode fallback

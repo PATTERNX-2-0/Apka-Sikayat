@@ -10,13 +10,12 @@ exports.getAuditsDashboard = getAuditsDashboard;
 exports.getPolicyRecommendations = getPolicyRecommendations;
 const firebase_1 = require("../../firebase");
 const firestore_1 = require("firebase/firestore");
-const pineconeService_1 = require("../services/pineconeService");
 const pdfService_1 = require("../services/pdfService");
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 /**
  * Helper to call Gemini Flash API
  */
 async function callGemini(systemPrompt, userMessage) {
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN || process.env.WHATSAPP_GEMINI_API_KEY || "";
     try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         const requestBody = {
@@ -46,6 +45,267 @@ async function callGemini(systemPrompt, userMessage) {
     }
 }
 /**
+ * Reusable helper to fetch live Firestore records, calculate statistics, and run Gemini analysis.
+ */
+async function compileCMExecutiveReportData(isTodayRequested, isComplaintsOnly, startDate, endDate) {
+    const complaintsRef = (0, firestore_1.collection)(firebase_1.db, 'complaints');
+    console.log('[Copilot Controller] Querying Firestore collection "complaints" in real-time...');
+    const querySnap = await (0, firestore_1.getDocs)(complaintsRef);
+    const allComplaints = [];
+    querySnap.forEach((doc) => {
+        allComplaints.push({ id: doc.id, ...doc.data() });
+    });
+    console.log(`[Copilot Controller] Successfully retrieved ${allComplaints.length} complaints from Firestore.`);
+    const getComplaintDateStr = (createdAt) => {
+        if (!createdAt)
+            return '';
+        if (typeof createdAt.toDate === 'function') {
+            return createdAt.toDate().toISOString().slice(0, 10);
+        }
+        if (createdAt.seconds) {
+            return new Date(createdAt.seconds * 1000).toISOString().slice(0, 10);
+        }
+        return new Date(createdAt).toISOString().slice(0, 10);
+    };
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    const todayStr = today.toISOString().slice(0, 10);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    // Apply today/yesterday filtering if requested (last 48 hours)
+    let complaints = allComplaints;
+    if (isTodayRequested) {
+        console.log('[Copilot Controller] Filtering complaints strictly for last 48 hours (today & yesterday)...');
+        complaints = allComplaints.filter(c => {
+            const dStr = getComplaintDateStr(c.createdAt);
+            return dStr === todayStr || dStr === yesterdayStr;
+        });
+        console.log(`[Copilot Controller] Filtered down to ${complaints.length} complaints for the today-ledger request.`);
+    }
+    else if (startDate || endDate) {
+        console.log(`[Copilot Controller] Filtering complaints by date range: ${startDate} to ${endDate}...`);
+        complaints = allComplaints.filter(c => {
+            const dStr = getComplaintDateStr(c.createdAt);
+            if (!dStr)
+                return false;
+            if (startDate && dStr < startDate)
+                return false;
+            if (endDate && dStr > endDate)
+                return false;
+            return true;
+        });
+        console.log(`[Copilot Controller] Filtered down to ${complaints.length} complaints for the date range.`);
+    }
+    if (isComplaintsOnly) {
+        const complaintsList = complaints.map(c => ({
+            id: c.id,
+            title: c.title || c.description || 'Grievance',
+            description: c.description || '',
+            district: c.district || 'General',
+            department: c.department || 'General',
+            status: c.status || 'Pending',
+            priority: c.priority || 'Normal',
+            createdAtStr: getComplaintDateStr(c.createdAt)
+        }));
+        return {
+            currentDate: new Date().toLocaleDateString('en-IN'),
+            currentTime: new Date().toLocaleTimeString('en-IN'),
+            total: complaints.length,
+            isComplaintsOnly: true,
+            complaintsList
+        };
+    }
+    // Analytics Engine
+    const total = complaints.length;
+    const resolved = complaints.filter(c => ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
+    const pending = total - resolved;
+    const critical = complaints.filter(c => c.priority === 'CRITICAL' && !['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
+    const escalated = complaints.filter(c => c.isEscalated === true || c.status === 'Escalated').length;
+    const resolutionRate = total > 0 ? ((resolved / total) * 100).toFixed(1) : '100.0';
+    // Calculate CSAT dynamically
+    const ratings = complaints.filter(c => c.feedback?.rating).map(c => c.feedback.rating);
+    const avgCsat = ratings.length > 0
+        ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1) + '/5.0'
+        : 'Insufficient citizen feedback available.';
+    // District Performance
+    const districtStats = {};
+    complaints.forEach(c => {
+        const dist = c.district || 'General';
+        if (!districtStats[dist])
+            districtStats[dist] = { total: 0, resolved: 0 };
+        districtStats[dist].total++;
+        if (['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)) {
+            districtStats[dist].resolved++;
+        }
+    });
+    const districtList = Object.entries(districtStats).map(([name, stats]) => ({
+        name,
+        total: stats.total,
+        rate: stats.total > 0 ? parseFloat(((stats.resolved / stats.total) * 100).toFixed(1)) : 100.0
+    }));
+    const sortedByRate = [...districtList].sort((a, b) => b.rate - a.rate);
+    const topDistricts = sortedByRate.slice(0, 3).map(d => `${d.name} (${d.rate}%)`);
+    const lowestDistricts = sortedByRate.slice(-3).reverse().map(d => `${d.name} (${d.rate}%)`);
+    // Department Performance
+    const deptStats = {};
+    complaints.forEach(c => {
+        const dept = c.department || 'General Department';
+        if (!deptStats[dept])
+            deptStats[dept] = { total: 0, resolved: 0 };
+        deptStats[dept].total++;
+        if (['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)) {
+            deptStats[dept].resolved++;
+        }
+    });
+    const departmentList = Object.entries(deptStats).map(([name, stats]) => ({
+        name,
+        total: stats.total,
+        rate: stats.total > 0 ? parseFloat(((stats.resolved / stats.total) * 100).toFixed(1)) : 100.0
+    }));
+    // Critical issues categories
+    const womenSafety = complaints.filter(c => (c.description || '').toLowerCase().includes('women') || (c.category || '').toLowerCase().includes('safety')).length;
+    const infrastructure = complaints.filter(c => (c.category || '').toLowerCase().includes('infrastructure') || (c.category || '').toLowerCase().includes('road')).length;
+    const flood = complaints.filter(c => (c.description || '').toLowerCase().includes('flood') || (c.description || '').toLowerCase().includes('waterlogging')).length;
+    const health = complaints.filter(c => (c.category || '').toLowerCase().includes('health') || (c.category || '').toLowerCase().includes('medical')).length;
+    const corruption = complaints.filter(c => {
+        const d = (c.description || '').toLowerCase();
+        return d.includes('bribe') || d.includes('money') || d.includes('cash') || d.includes('corruption');
+    }).length;
+    const auditFlags = complaints.filter(c => ['Resolved', 'Closed'].includes(c.status) && c.feedback?.rating && c.feedback.rating <= 2).length;
+    const todayNew = allComplaints.filter(c => getComplaintDateStr(c.createdAt) === todayStr).length;
+    const todayResolved = allComplaints.filter(c => getComplaintDateStr(c.createdAt) === todayStr &&
+        ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
+    // High priority pending issues ledger listing
+    const pendingList = complaints
+        .filter(c => !['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status))
+        .sort((a, b) => (b.priority === 'CRITICAL' ? 1 : 0) - (a.priority === 'CRITICAL' ? 1 : 0))
+        .slice(0, 5)
+        .map(c => ({
+        title: c.title || c.description || 'Grievance',
+        description: c.description || '',
+        district: c.district || 'General',
+        department: c.department || 'N/A',
+        status: c.status || 'N/A',
+        priority: c.priority || 'Normal'
+    }));
+    // Recently resolved grievances listing
+    const resolvedList = complaints
+        .filter(c => ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status))
+        .slice(0, 5)
+        .map(c => ({
+        department: c.department || 'N/A',
+        category: c.category || 'N/A',
+        title: c.title || c.description || 'Grievance',
+        description: c.description || '',
+        feedback: { rating: c.feedback?.rating || null }
+    }));
+    if (total === 0) {
+        return {
+            currentDate: new Date().toLocaleDateString('en-IN'),
+            currentTime: new Date().toLocaleTimeString('en-IN'),
+            total: 0,
+            resolved: 0,
+            pending: 0,
+            critical: 0,
+            escalated: 0,
+            resolutionRate: '100.0',
+            csat: 'Insufficient citizen feedback available.',
+            topDistricts: [],
+            lowestDistricts: [],
+            districtList: [],
+            departmentList: [],
+            pendingList: [],
+            resolvedList: [],
+            executiveSummaryText: 'No complaints were registered today.',
+            currentSituationText: 'No situations are currently reported for this period.',
+            districtAnalysisText: 'No complaints recorded across districts.',
+            departmentAnalysisText: 'No departmental workload reported.',
+            riskAnalysisText: 'No active critical incidents or public safety risks reported.',
+            auditFindingsText: 'No audit warnings detected.',
+            aiInsightsText: 'System operations stable with empty workload queue.',
+            cmBriefingText: 'No complaints were registered today. Administrative operations are fully clear.',
+            resourceAllocationText: 'No resource redistributions required.'
+        };
+    }
+    const systemPrompt = `
+You are the AI Governance Copilot for the Chief Minister of Delhi.
+Analyze the following operational data and produce a structured JSON object containing dynamic governance analysis.
+
+DO NOT use hardcoded recommendations, placeholder numbers, or template text.
+Every comment and insight must be derived from the specific metrics provided.
+The JSON must contain EXACTLY the following keys:
+{
+  "executiveSummaryText": "...",
+  "currentSituationText": "...",
+  "districtAnalysisText": "...",
+  "departmentAnalysisText": "...",
+  "riskAnalysisText": "...",
+  "auditFindingsText": "...",
+  "aiInsightsText": "...",
+  "cmBriefingText": "...",
+  "resourceAllocationText": "..."
+}
+
+### Live Telemetry Data:
+- Total Complaints: ${total}
+- Resolved Complaints: ${resolved}
+- Pending Complaints: ${pending}
+- Resolution Rate: ${resolutionRate}%
+- Average CSAT: ${avgCsat}
+- Critical Complaints: ${critical}
+- Escalated Complaints: ${escalated}
+- Critical Categories: Women Safety (${womenSafety}), Infrastructure (${infrastructure}), Flood/Drainage (${flood}), Health (${health}), Corruption (${corruption}), Audit Flags (Low rating resolutions: ${auditFlags})
+- Top Wards/Districts: ${topDistricts.join(', ')}
+- Worst Wards/Districts: ${lowestDistricts.join(', ')}
+- District Breakdown: ${JSON.stringify(districtList)}
+- Department Breakdown: ${JSON.stringify(departmentList)}
+`;
+    const geminiReply = await callGemini(systemPrompt, `Generate the executive analysis structure.`);
+    // Attempt to parse JSON response from Gemini
+    let parsedAnalysis = {};
+    try {
+        const jsonMatch = geminiReply.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            parsedAnalysis = JSON.parse(jsonMatch[0]);
+        }
+        else {
+            parsedAnalysis = JSON.parse(geminiReply);
+        }
+    }
+    catch (err) {
+        console.warn('[Gemini Report Generator] Failed to parse JSON, using raw reply as fallback summaries');
+        parsedAnalysis = {
+            executiveSummaryText: geminiReply,
+            currentSituationText: `Detailed situation report based on ${total} total records.`,
+            districtAnalysisText: `District analysis based on the performance of ${districtList.length} districts.`,
+            departmentAnalysisText: `Department analysis based on the performance of ${departmentList.length} departments.`,
+            riskAnalysisText: `Risk metrics based on ${critical} critical issues.`,
+            auditFindingsText: `Audit warnings computed from ${auditFlags} rating flags.`,
+            aiInsightsText: `Predictive model analysis for the current state workload.`,
+            cmBriefingText: `Chief Minister direct briefing overview.`,
+            resourceAllocationText: `Recommended resource shifts.`
+        };
+    }
+    return {
+        currentDate: new Date().toLocaleDateString('en-IN'),
+        currentTime: new Date().toLocaleTimeString('en-IN'),
+        total,
+        resolved,
+        pending,
+        critical,
+        escalated,
+        resolutionRate,
+        csat: avgCsat,
+        topDistricts,
+        lowestDistricts,
+        districtList,
+        departmentList,
+        pendingList,
+        resolvedList,
+        ...parsedAnalysis
+    };
+}
+/**
  * POST /api/cm/copilot/chat
  * Governance Copilot Chat with RAG-based context retrieval from Pinecone
  */
@@ -56,46 +316,125 @@ async function handleCopilotChat(req, res) {
     }
     try {
         const queryLower = userQuery.toLowerCase();
-        const reportTriggers = [
-            'pdf', 'report', 'briefing', 'summary', 'complaint', 'grievance', 'speech', 'audit', 'today'
-        ];
+        // Intent Detection: Check if they are asking for a PDF report / briefing / summary / audit
+        const reportTriggers = ['pdf', 'report', 'briefing', 'summary', 'audit', 'executive briefing'];
         const isReportRequest = reportTriggers.some(t => queryLower.includes(t));
         if (isReportRequest) {
+            const isTodayRequested = queryLower.includes('today');
+            const isExecutiveRequested = queryLower.includes('executive') || queryLower.includes('governance') || queryLower.includes('audit') || queryLower.includes('briefing') || queryLower.includes('summary');
+            // Determine if they want a custom speech / topic PDF instead of database ledger
+            const isCustomTopic = queryLower.includes('speech') || queryLower.includes('directive') || queryLower.includes('policy') || queryLower.includes('note') || queryLower.includes('letter') || (!queryLower.includes('executive') && !queryLower.includes('governance') && !queryLower.includes('complaint') && !queryLower.includes('today') && !queryLower.includes('ledger') && !queryLower.includes('briefing'));
+            if (isCustomTopic) {
+                console.log(`[Copilot Controller] [Render Log] Custom PDF/Speech request detected: "${userQuery}"`);
+                // Fetch complaints to seed Gemini with live data if relevant
+                const complaintsRef = (0, firestore_1.collection)(firebase_1.db, 'complaints');
+                console.log('[Copilot Controller] [Render Log] Fetching context for speech from Firestore...');
+                const querySnap = await (0, firestore_1.getDocs)(complaintsRef);
+                const complaints = [];
+                querySnap.forEach((doc) => {
+                    complaints.push({ id: doc.id, ...doc.data() });
+                });
+                console.log(`[Copilot Controller] [Render Log] Context loaded with ${complaints.length} grievances.`);
+                const contextBlocks = complaints.slice(0, 15).map((c, idx) => {
+                    return `[Grievance ${idx + 1}]: Category: ${c.category || 'General'}, Status: ${c.status || 'Pending'}, District: ${c.district || 'General'}, Details: ${c.title || c.description || 'N/A'}`;
+                }).join('\n');
+                const systemPrompt = `
+You are the AI Governance Copilot for the Chief Minister of Delhi.
+The user (Chief Minister) is requesting a document/speech/briefing on a specific topic (e.g. a speech on air pollution, directive, letter).
+Draft a highly professional, authoritative, and comprehensive text suitable to be converted directly into a PDF report.
+Use the following live database context if relevant to their request:
+${contextBlocks}
+
+IMPORTANT: Keep formatting clean. Do NOT use markdown bold/italic asterisks or hashtags since they will render poorly in the PDF. Use normal text paragraphs and clear double line breaks.
+`;
+                console.log('[Copilot Controller] [Render Log] Querying Gemini for speech draft...');
+                const generatedContent = await callGemini(systemPrompt, userQuery);
+                console.log('[Copilot Controller] [Render Log] Gemini speech draft successfully created.');
+                let title = "Delhi Governance Special Report";
+                let filename = "Governance_Special_Report";
+                if (queryLower.includes('speech')) {
+                    title = "Chief Minister Official Speech";
+                    filename = "CM_Official_Speech";
+                }
+                else if (queryLower.includes('directive')) {
+                    title = "Executive Governance Directive";
+                    filename = "Executive_Directive";
+                }
+                if (queryLower.includes('pollution')) {
+                    title += " - Air Pollution Mitigation";
+                    filename += "_Air_Pollution";
+                }
+                else if (queryLower.includes('water')) {
+                    title += " - Water Resource Management";
+                    filename += "_Water_Resource";
+                }
+                return res.status(200).json({
+                    sender: 'ai',
+                    text: generatedContent, // Render the generated speech directly in the chat bubble!
+                    type: 'pdf_download',
+                    data: {
+                        title,
+                        filename,
+                        isExecutiveReport: false,
+                        text: generatedContent
+                    }
+                });
+            }
+            console.log(`[Copilot Controller] [Render Log] Standard Governance Report request detected: "${userQuery}"`);
+            const isComplaintsOnly = !isExecutiveRequested && (queryLower.includes('today') || queryLower.includes('complaint') || queryLower.includes('compain'));
+            const reportPayload = await compileCMExecutiveReportData(isTodayRequested, isComplaintsOnly);
+            if (isTodayRequested && reportPayload.total === 0) {
+                console.log('[Copilot Controller] [Render Log] No complaints registered today. Returning text alert.');
+                return res.status(200).json({
+                    sender: 'ai',
+                    text: 'No complaints were registered today.',
+                    type: 'text'
+                });
+            }
+            console.log(`[Copilot Controller] [Render Log] Returning PDF payload download for: ${isComplaintsOnly ? 'Ledger' : 'Executive Report'}`);
             return res.status(200).json({
                 sender: 'ai',
-                text: ``, // Return empty string so no text bubble is rendered in the UI
+                text: ``, // Bypasses chat bubble rendering in UI
                 type: 'pdf_download',
                 data: {
-                    title: "Chief Minister Executive Governance Report",
-                    filename: "CM_Executive_Governance_Report",
-                    isExecutiveReport: true
+                    title: isComplaintsOnly ? "Daily Grievance Ledger" : "Chief Minister Executive Governance Report",
+                    filename: isComplaintsOnly
+                        ? (isTodayRequested ? "CM_Today_Grievance_Ledger" : "CM_Grievance_Ledger")
+                        : (isTodayRequested ? "CM_Today_Executive_Report" : "CM_Executive_Governance_Report"),
+                    isExecutiveReport: true,
+                    text: JSON.stringify(reportPayload)
                 }
             });
         }
-        // 2. Retrieve knowledge from Pinecone vector index for standard queries
-        const vectorMatches = await (0, pineconeService_1.searchVectors)(userQuery, 5);
-        const contextBlocks = vectorMatches.map((match, idx) => {
-            const meta = match.metadata || {};
-            return `[Source ${idx + 1} - ${meta.type || 'Document'}]: Title: ${meta.title || 'N/A'}, Category: ${meta.category || 'N/A'}, District: ${meta.district || 'N/A'}, Description: ${meta.text || 'N/A'}`;
+        // 2. Standard Conversational Question Routing
+        // Retrieve live operational knowledge from Firestore database directly for context
+        const complaintsRef = (0, firestore_1.collection)(firebase_1.db, 'complaints');
+        console.log('[Copilot Controller] [Chat] Retrieving live complaints from Firestore for conversational context...');
+        const querySnap = await (0, firestore_1.getDocs)(complaintsRef);
+        const complaints = [];
+        querySnap.forEach((doc) => {
+            complaints.push({ id: doc.id, ...doc.data() });
+        });
+        console.log(`[Copilot Controller] [Chat] Loaded ${complaints.length} complaints for context generation.`);
+        const contextBlocks = complaints.slice(0, 30).map((c, idx) => {
+            return `[Grievance Record ${idx + 1}]: ID: ${c.id}, Category: ${c.category || 'General'}, Status: ${c.status || 'Submitted'}, District: ${c.district || 'General'}, Priority: ${c.priority || 'Normal'}, Details: ${c.title || c.description || 'N/A'}`;
         }).join('\n\n');
-        // 3. Query Gemini Flash with retrieved context
         const systemPrompt = `
 You are the AI Governance Copilot for the Chief Minister of Delhi.
-You have access to a real-time vector database of citizen grievances, policy documents, and performance records.
+You have direct, real-time access to the live Firestore database containing all state grievances and department workloads.
 
-### Context from Vector Search:
-${contextBlocks || "No direct matching vector documents found. Rely on general city administration records."}
+### Context from Live Firestore Database:
+${contextBlocks || "No active grievances found in the database."}
 
 ### Guidelines:
 - Answer the Chief Minister's query directly and authoritatively.
-- Only reference the provided context. Do not hallucinate or manufacture metrics.
-- Keep recommendations actionable, emphasizing staff deployment and resource reallocation.
+- Base your answers strictly on the live Firestore records provided in the context.
+- Summarize quantities, statuses, and locations accurately without any placeholder fallbacks.
 `;
         const reply = await callGemini(systemPrompt, userQuery);
-        // 4. Construct rich response payload
         let type = 'text';
         let dataPayload = null;
-        if (userQuery.toLowerCase().includes('dwarka') || userQuery.toLowerCase().includes('pipeline') || userQuery.toLowerCase().includes('complaint')) {
+        if (queryLower.includes('dwarka') || queryLower.includes('pipeline') || queryLower.includes('complaint')) {
             type = 'insight';
             dataPayload = {
                 insight: "Direct Geospatial Action Flag",
@@ -121,124 +460,34 @@ ${contextBlocks || "No direct matching vector documents found. Rely on general c
  */
 async function handleCMExecutiveReportPDF(req, res) {
     try {
-        const complaintsRef = (0, firestore_1.collection)(firebase_1.db, 'complaints');
-        const querySnap = await (0, firestore_1.getDocs)(complaintsRef);
-        const complaints = [];
-        querySnap.forEach((doc) => {
-            complaints.push({ id: doc.id, ...doc.data() });
-        });
-        const total = complaints.length;
-        const resolved = complaints.filter(c => ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
-        const pending = total - resolved;
-        const critical = complaints.filter(c => c.priority === 'CRITICAL' && !['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
-        const escalated = complaints.filter(c => c.isEscalated === true || c.status === 'Escalated').length;
-        const resolutionRate = total > 0 ? ((resolved / total) * 100).toFixed(1) : '100.0';
-        const ratings = complaints.filter(c => c.feedback?.rating).map(c => c.feedback.rating);
-        const avgCsat = ratings.length > 0 ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1) : '4.6';
-        // Section 2: District Performance
-        const districtStats = {};
-        complaints.forEach(c => {
-            const dist = c.district || 'New Delhi';
-            if (!districtStats[dist])
-                districtStats[dist] = { total: 0, resolved: 0 };
-            districtStats[dist].total++;
-            if (['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)) {
-                districtStats[dist].resolved++;
+        const { text, filename, startDate, endDate } = req.body;
+        let reportData = {};
+        let isFullyDynamic = false;
+        if (text) {
+            try {
+                reportData = JSON.parse(text);
+                if (reportData.isComplaintsOnly || (reportData.currentSituationText && reportData.executiveSummaryText)) {
+                    isFullyDynamic = true;
+                }
             }
-        });
-        const districtList = Object.entries(districtStats).map(([name, stats]) => ({
-            name,
-            total: stats.total,
-            rate: stats.total > 0 ? parseFloat(((stats.resolved / stats.total) * 100).toFixed(1)) : 100.0
-        }));
-        const sortedByRate = [...districtList].sort((a, b) => b.rate - a.rate);
-        const topDistricts = sortedByRate.slice(0, 3).map(d => `${d.name} (${d.rate}%)`);
-        const lowestDistricts = sortedByRate.slice(-3).reverse().map(d => `${d.name} (${d.rate}%)`);
-        // Section 3: Department Performance
-        const deptStats = {};
-        complaints.forEach(c => {
-            const dept = c.department || 'General Department';
-            if (!deptStats[dept])
-                deptStats[dept] = { total: 0, resolved: 0 };
-            deptStats[dept].total++;
-            if (['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)) {
-                deptStats[dept].resolved++;
+            catch (err) {
+                console.error('[CM Executive Report] Error parsing reportData JSON:', err);
             }
-        });
-        const departmentList = Object.entries(deptStats).map(([name, stats]) => ({
-            name,
-            total: stats.total,
-            rate: stats.total > 0 ? parseFloat(((stats.resolved / stats.total) * 100).toFixed(1)) : 100.0
-        }));
-        // Section 4: Critical Issues Categories
-        const womenSafety = complaints.filter(c => (c.description || '').toLowerCase().includes('women') || (c.category || '').toLowerCase().includes('safety')).length;
-        const infrastructure = complaints.filter(c => (c.category || '').toLowerCase().includes('infrastructure') || (c.category || '').toLowerCase().includes('road')).length;
-        const flood = complaints.filter(c => (c.description || '').toLowerCase().includes('flood') || (c.description || '').toLowerCase().includes('waterlogging')).length;
-        const health = complaints.filter(c => (c.category || '').toLowerCase().includes('health') || (c.category || '').toLowerCase().includes('medical')).length;
-        const corruption = complaints.filter(c => {
-            const d = (c.description || '').toLowerCase();
-            return d.includes('bribe') || d.includes('money') || d.includes('cash') || d.includes('corruption');
-        }).length;
-        const auditFlags = complaints.filter(c => ['Resolved', 'Closed'].includes(c.status) && c.feedback?.rating && c.feedback.rating <= 2).length;
-        // Filter complaints registered today
-        const getComplaintDateStr = (createdAt) => {
-            if (!createdAt)
-                return '';
-            if (typeof createdAt.toDate === 'function') {
-                return createdAt.toDate().toISOString().slice(0, 10);
-            }
-            if (createdAt.seconds) {
-                return new Date(createdAt.seconds * 1000).toISOString().slice(0, 10);
-            }
-            return new Date(createdAt).toISOString().slice(0, 10);
-        };
-        const todayStr = new Date().toISOString().slice(0, 10);
-        const todayComplaints = complaints.filter(c => getComplaintDateStr(c.createdAt) === todayStr);
-        // Use today's complaints, or fallback to the most recent 10 complaints
-        const activeReportComplaints = todayComplaints.length > 0
-            ? todayComplaints
-            : complaints.slice(0, 10);
-        const todayNew = complaints.filter(c => getComplaintDateStr(c.createdAt) === todayStr).length;
-        const todayResolved = complaints.filter(c => getComplaintDateStr(c.createdAt) === todayStr &&
-            ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
-        // High priority pending issues listing
-        const pendingList = complaints
-            .filter(c => !['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status))
-            .sort((a, b) => (b.priority === 'CRITICAL' ? 1 : 0) - (a.priority === 'CRITICAL' ? 1 : 0))
-            .slice(0, 5);
-        // Recently resolved grievances listing
-        const resolvedList = complaints
-            .filter(c => ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status))
-            .slice(0, 5);
-        const reportData = {
-            currentDate: new Date().toLocaleDateString(),
-            currentTime: new Date().toLocaleTimeString(),
-            total,
-            resolved,
-            pending,
-            critical,
-            escalated,
-            resolutionRate,
-            csat: avgCsat,
-            topDistricts,
-            lowestDistricts,
-            districtList,
-            departmentList,
-            womenSafety,
-            infrastructure,
-            flood,
-            health,
-            corruption,
-            auditFlags,
-            activeReportComplaints,
-            todayNew,
-            todayResolved,
-            pendingList,
-            resolvedList
-        };
+        }
+        if (!isFullyDynamic) {
+            console.log('[CM Executive Report] Pre-compiled text missing in request. Querying Firestore directly on the backend...');
+            const isToday = filename && filename.toLowerCase().includes('today');
+            const isExecutive = filename && (filename.toLowerCase().includes('executive') || filename.toLowerCase().includes('governance'));
+            const isComplaintsOnly = !isExecutive;
+            reportData = await compileCMExecutiveReportData(isToday, isComplaintsOnly, startDate, endDate);
+        }
+        if (!reportData.currentDate)
+            reportData.currentDate = new Date().toLocaleDateString('en-IN');
+        if (!reportData.currentTime)
+            reportData.currentTime = new Date().toLocaleTimeString('en-IN');
         const pdfBuffer = await (0, pdfService_1.generateCMExecutiveReport)(reportData);
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'attachment; filename=CM_Executive_Governance_Report.pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=${filename || 'CM_Executive_Governance_Report'}.pdf`);
         return res.status(200).send(pdfBuffer);
     }
     catch (error) {

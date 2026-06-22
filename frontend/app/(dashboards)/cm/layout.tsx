@@ -121,7 +121,7 @@ const DraggableCopilot = () => {
           {/* Animated Background Glow */}
           <div className="absolute inset-0 bg-[#FF9933] opacity-0 group-hover:opacity-20 transition-opacity duration-300"></div>
 
-          <Bot className="w-7 h-7 sm:w-8 sm:h-8 text-[#FF9933] group-hover:animate-pulse relative z-10" />
+          <img src="/copilot_fab_logo.png" alt="Copilot AI Logo" className="w-full h-full object-cover rounded-full relative z-10" />
         </motion.div>
 
         {/* Online Status Dot */}

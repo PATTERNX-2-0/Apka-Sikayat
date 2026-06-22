@@ -14,6 +14,9 @@ export function getAppUrl(): string {
 
   // 3. Fallback to client-side window origin if available
   if (typeof window !== 'undefined' && window.location) {
+    if (window.location.hostname.includes('vercel.app') || window.location.hostname.includes('apka-sikayat')) {
+      return 'https://apka-sikayat.vercel.app';
+    }
     return window.location.origin;
   }
 
@@ -27,6 +30,32 @@ export function generateTrackingToken(): string {
   }
   // Cryptographically robust fallback
   return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+}
+
+export async function generateNextComplaintId(): Promise<string> {
+  const { db } = require('./firebase');
+  const { collection, getDocs } = require('firebase/firestore');
+  const year = new Date().getFullYear();
+  try {
+    const complaintsRef = collection(db, 'complaints');
+    const snap = await getDocs(complaintsRef);
+    let maxNum = 0;
+    snap.forEach((doc: any) => {
+      const id = doc.id;
+      if (id.startsWith(`GRV-${year}-`)) {
+        const numPart = parseInt(id.split('-')[2], 10);
+        if (!isNaN(numPart) && numPart > maxNum) {
+          maxNum = numPart;
+        }
+      }
+    });
+    const nextNum = (maxNum + 1).toString().padStart(6, '0');
+    return `GRV-${year}-${nextNum}`;
+  } catch (err) {
+    console.error('Error generating complaint ID:', err);
+    const randNum = Math.floor(1 + Math.random() * 999999).toString().padStart(6, '0');
+    return `GRV-${year}-${randNum}`;
+  }
 }
 
 export function getBackendUrl(): string {
