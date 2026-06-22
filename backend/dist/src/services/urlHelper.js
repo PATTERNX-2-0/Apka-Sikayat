@@ -38,7 +38,11 @@ function generateTrackingToken() {
     return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 }
 async function generateNextComplaintId() {
-    const year = new Date().getFullYear();
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = (now.getMonth() + 1).toString().padStart(2, '0');
+    const day = now.getDate().toString().padStart(2, '0');
+    const dateStr = `${year}${month}${day}`;
     try {
         const { db } = require('../../firebase');
         const { collection, getDocs } = require('firebase/firestore');
@@ -47,20 +51,23 @@ async function generateNextComplaintId() {
         let maxNum = 0;
         snap.forEach((doc) => {
             const id = doc.id;
-            if (id.startsWith(`GRV-${year}-`)) {
+            if (id.startsWith(`CMP-${dateStr}-`)) {
                 const numPart = parseInt(id.split('-')[2], 10);
                 if (!isNaN(numPart) && numPart > maxNum) {
                     maxNum = numPart;
                 }
             }
         });
-        const nextNum = (maxNum + 1).toString().padStart(6, '0');
-        return `GRV-${year}-${nextNum}`;
+        if (maxNum === 0) {
+            return `CMP-${dateStr}-1001`;
+        }
+        const nextNum = (maxNum + 1).toString();
+        return `CMP-${dateStr}-${nextNum}`;
     }
     catch (err) {
         console.error('Error generating complaint ID:', err);
-        const randNum = Math.floor(1 + Math.random() * 999999).toString().padStart(6, '0');
-        return `GRV-${year}-${randNum}`;
+        const randNum = Math.floor(1000 + Math.random() * 9000).toString();
+        return `CMP-${dateStr}-${randNum}`;
     }
 }
 function getBackendUrl() {
