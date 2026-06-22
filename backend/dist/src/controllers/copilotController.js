@@ -11,11 +11,11 @@ exports.getPolicyRecommendations = getPolicyRecommendations;
 const firebase_1 = require("../../firebase");
 const firestore_1 = require("firebase/firestore");
 const pdfService_1 = require("../services/pdfService");
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 /**
  * Helper to call Gemini Flash API
  */
 async function callGemini(systemPrompt, userMessage) {
-    const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN || process.env.WHATSAPP_GEMINI_API_KEY || "";
     try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         const requestBody = {

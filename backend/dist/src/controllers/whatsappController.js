@@ -297,42 +297,21 @@ async function handleWebhookEvent(req, res) {
             await deleteSession(from);
             return;
         }
-        const isGreeting = ['hi', 'hello', 'complaint', 'help', 'hey', 'start'].includes(queryLower);
-        // Initialize or reset session
+        const isGreeting = ['hi', 'hello', 'hey', 'start', 'restart', 'new complaint'].includes(queryLower);
+        // Initialize or reset session (always start a fresh onboarding flow on greeting reset)
         if (!session || isGreeting) {
-            // Check if user is already registered under this phone number to load their profile (Memory)
-            let existingUser = null;
-            try {
-                const userDocRef = (0, firestore_1.doc)(firebase_1.db, 'users', `wa_${from}`);
-                const userDocSnap = await (0, firestore_1.getDoc)(userDocRef);
-                if (userDocSnap.exists()) {
-                    existingUser = userDocSnap.data();
-                }
-            }
-            catch (err) {
-                console.warn('[WhatsApp Webhook] Firestore fetch user failed:', err.message);
-            }
-            if (existingUser && existingUser.fullName) {
-                session = {
-                    state: 'COLLECTING_INFO',
-                    phone: from,
-                    fullName: existingUser.fullName,
-                    email: existingUser.email || '',
-                    profileConfirmed: true,
-                    conversationLog: []
-                };
-                await saveSession(from, session);
-                await sendReply(from, `🇮🇳 Welcome back to Apka Shikayat, *${existingUser.fullName}*!\n\nYour voice has the power to create change.\nReport issues, track resolutions, and help build a better tomorrow with transparent governance.\n\nI can help you register & track public grievances.\n\nPlease describe the issue or grievance you want to report today. (You can also send voice notes or upload photo/video evidence)`);
-            }
-            else {
-                session = {
-                    state: 'COLLECTING_INFO',
-                    phone: from,
-                    conversationLog: []
-                };
-                await saveSession(from, session);
-                await sendReply(from, "🇮🇳 Welcome to Apka Shikayat\n\nYour voice has the power to create change.\nReport issues, track resolutions, and help build a better tomorrow with transparent governance.\n\nI can help you register & track public grievances.\n\nLet's begin.\nWhat is your full name ?");
-            }
+            session = {
+                state: 'COLLECTING_NAME',
+                phone: from,
+                conversationLog: []
+            };
+            await saveSession(from, session);
+            await sendReply(from, "Welcome to the CM Grievance Portal.\n\nI can help you register and track public grievances.\n\nLet's begin.\n\nWhat is your full name?");
+            return;
+        }
+        // Handle completed session state
+        if (session.state === 'COMPLETED') {
+            await sendReply(from, "Your complaint has been successfully registered. If you would like to report another issue, please type *Hi*, *Start*, or *New Complaint* to begin a new session.");
             return;
         }
         // Process Voice Notes, Media, and Location
@@ -375,30 +354,84 @@ async function handleWebhookEvent(req, res) {
             };
             userText = `[Shared Location Address: ${session.location.address}]`;
         }
-        // Pre-extract clean full name if it's not yet collected (Issue 1)
-        if (!session.fullName && userText) {
-            const cleanedName = await extractCleanName(userText);
-            if (cleanedName) {
-                session.fullName = cleanedName;
-                console.log(`[Name Extraction] Extracted and stored clean name: ${cleanedName}`);
-            }
-        }
         // Append to conversation log (conversational memory)
         session.conversationLog = session.conversationLog || [];
         session.conversationLog.push({ sender: 'user', text: userText });
-        // Handle PROFILE CONFIRMATION state
+        // Onboarding Step 1: COLLECTING_NAME
+        if (session.state === 'COLLECTING_NAME') {
+            const cleanedName = await extractCleanName(userText);
+            if (cleanedName) {
+                session.fullName = cleanedName;
+                session.state = 'COLLECTING_EMAIL';
+                await saveSession(from, session);
+                await sendReply(from, "Please enter your email address.");
+            }
+            else {
+                await sendReply(from, "I could not extract a valid full name. Please enter your full name to proceed:");
+            }
+            return;
+        }
+        // Onboarding Step 2: COLLECTING_EMAIL
+        if (session.state === 'COLLECTING_EMAIL') {
+            const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+            const emailMatch = userText.match(emailRegex);
+            if (emailMatch) {
+                session.email = emailMatch[0];
+                session.state = 'CONFIRMING_PHONE';
+                await saveSession(from, session);
+                await sendReply(from, `We detected your WhatsApp number:\n+${from}\n\nWould you like to use this number for updates?\n\nReply YES or NO.`);
+            }
+            else {
+                await sendReply(from, "Please enter a valid email address:");
+            }
+            return;
+        }
+        // Onboarding Step 3: CONFIRMING_PHONE
+        if (session.state === 'CONFIRMING_PHONE') {
+            const ans = queryLower.trim();
+            if (ans === 'yes' || ans === 'y') {
+                session.verifiedPhone = `+${from}`;
+                session.state = 'CONFIRMING_PROFILE';
+                await saveSession(from, session);
+                await sendReply(from, `Name:\n${session.fullName}\n\nEmail:\n${session.email}\n\nPhone:\n${session.verifiedPhone}\n\nIs this information correct?\n\nReply YES or EDIT.`);
+            }
+            else if (ans === 'no' || ans === 'n') {
+                session.state = 'ENTERING_PHONE';
+                await saveSession(from, session);
+                await sendReply(from, "Please enter your preferred phone number for updates (including country code):");
+            }
+            else {
+                await sendReply(from, "Reply YES or NO.");
+            }
+            return;
+        }
+        // Onboarding Step 3 (Alternate): ENTERING_PHONE
+        if (session.state === 'ENTERING_PHONE') {
+            const phoneClean = userText.replace(/[^0-9+]/g, '');
+            if (phoneClean.length >= 10) {
+                session.verifiedPhone = phoneClean.startsWith('+') ? phoneClean : `+${phoneClean}`;
+                session.state = 'CONFIRMING_PROFILE';
+                await saveSession(from, session);
+                await sendReply(from, `Name:\n${session.fullName}\n\nEmail:\n${session.email}\n\nPhone:\n${session.verifiedPhone}\n\nIs this information correct?\n\nReply YES or EDIT.`);
+            }
+            else {
+                await sendReply(from, "Please enter a valid phone number (including country code):");
+            }
+            return;
+        }
+        // Onboarding Step 4: CONFIRMING_PROFILE (Profile Confirmation YES/EDIT)
         if (session.state === 'CONFIRMING_PROFILE') {
             const ans = queryLower.trim();
             if (ans === 'yes' || ans === 'y') {
                 session.profileConfirmed = true;
                 session.state = 'COLLECTING_INFO';
                 await saveSession(from, session);
-                // Profile is saved ONLY after confirmation
+                // Profile is saved ONLY after YES confirmation
                 const userProfile = {
                     uid: `wa_${from}`,
                     fullName: session.fullName,
                     email: session.email,
-                    phone: `+${from}`,
+                    phone: session.verifiedPhone || `+${from}`,
                     district: session.district || 'South West Delhi',
                     role: 'Citizen',
                     registrationSource: 'WhatsApp',
@@ -419,7 +452,7 @@ async function handleWebhookEvent(req, res) {
             else if (ans === 'edit' || ans === 'no' || ans === 'n') {
                 session.fullName = undefined;
                 session.email = undefined;
-                session.state = 'COLLECTING_INFO';
+                session.state = 'COLLECTING_NAME';
                 session.profileConfirmed = false;
                 await saveSession(from, session);
                 await sendReply(from, "Let's correct your details. What is your full name?");
@@ -433,18 +466,8 @@ async function handleWebhookEvent(req, res) {
         if (session.state === 'CONFIRMING_COMPLAINT') {
             const ans = queryLower.trim();
             if (ans === 'yes' || ans === 'y') {
-                const userProfile = {
-                    uid: `wa_${from}`,
-                    fullName: session.fullName,
-                    email: session.email,
-                    phone: `+${from}`,
-                    district: session.district || 'South West Delhi',
-                    role: 'Citizen',
-                    registrationSource: 'WhatsApp',
-                    joinedDate: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
-                };
-                session.citizenUid = userProfile.uid;
-                session.verifiedPhone = userProfile.phone;
+                session.citizenUid = `wa_${from}`;
+                session.verifiedPhone = session.verifiedPhone || `+${from}`;
                 await createComplaintFromSession(from, session);
             }
             else if (ans === 'edit' || ans === 'no' || ans === 'n') {
@@ -467,18 +490,14 @@ Act like a polite, empathetic, and professional citizen support officer. Avoid r
 
 ### Rules:
 1. Extract the following entities from the conversation history (specifically focusing on user inputs):
-   - "fullName": The citizen's full name. Extract ONLY the actual name itself (e.g., "Ramesh Mallik" from "My name is Ramesh Mallik", "Amer nam Ramesh Mallik", or "I am Ramesh Mallik"). Never store greetings or conversational sentences or prefixes. If the name is not yet provided, set to null.
-   - "email": The citizen's email address. If not yet provided, set to null.
    - "description": The details of the complaint. Deduce this from their messages or media description. If not yet provided, set to null.
    - "category": The category ("Water Supply", "Road Maintenance", "Electricity", "Sanitation", "Safety", "Other"). If not yet provided, set to null.
    - "district": The Delhi district (must be one of: "South West Delhi", "New Delhi", "Central Delhi", "East Delhi", "Shahdara", "North West Delhi"). If not yet provided, set to null.
-2. Ask follow-up questions naturally if information is missing (fullName, email, description, district). Do not ask for all missing details in a single query. Focus on one or two details first.
-3. If the user provides details out of order (e.g. describes their issue first, then gives name), handle it gracefully. Do not force a rigid form.
+2. Ask follow-up questions naturally if information is missing (description, district). Do not ask for all missing details in a single query. Focus on one or two details first.
+3. If the user provides details out of order, handle it gracefully. Do not force a rigid form.
 4. Output your response ONLY as a JSON object matching this schema:
 {
   "extracted": {
-    "fullName": "extracted name or null",
-    "email": "extracted email or null",
     "description": "extracted description or null",
     "category": "extracted category or null",
     "district": "extracted district or null"
@@ -491,8 +510,6 @@ Conversation History:
 ${session.conversationLog.map((l) => `${l.sender === 'user' ? 'Citizen' : 'Officer'}: ${l.text}`).join('\n')}
 
 Previously Extracted Details:
-Name: ${session.fullName || 'null'}
-Email: ${session.email || 'null'}
 Description: ${session.description || 'null'}
 Category: ${session.category || 'null'}
 District: ${session.district || 'null'}
@@ -510,23 +527,12 @@ District: ${session.district || 'null'}
             // Merge newly extracted values
             if (geminiData.extracted) {
                 const ext = geminiData.extracted;
-                if (ext.fullName && ext.fullName !== 'null')
-                    session.fullName = ext.fullName;
-                if (ext.email && ext.email !== 'null')
-                    session.email = ext.email;
                 if (ext.description && ext.description !== 'null')
                     session.description = ext.description;
                 if (ext.category && ext.category !== 'null')
                     session.category = ext.category;
                 if (ext.district && ext.district !== 'null')
                     session.district = ext.district;
-            }
-            // Transition to PROFILE CONFIRMATION if name and email are gathered
-            if (session.fullName && session.email && !session.profileConfirmed) {
-                session.state = 'CONFIRMING_PROFILE';
-                await saveSession(from, session);
-                await sendReply(from, `Name:\n${session.fullName}\n\nEmail:\n${session.email}\n\nPhone:\n+${from}\n\nReply:\n\nYES\nor\nEDIT`);
-                return;
             }
             // Transition to COMPLAINT REVIEW if profile is confirmed and complaint info is complete
             if (session.profileConfirmed && session.description && session.district) {
@@ -578,7 +584,6 @@ async function createComplaintFromSession(from, session) {
     const shortToken = trackingToken.slice(0, 10);
     const appUrl = (0, urlHelper_1.getAppUrl)();
     const trackingLink = `${appUrl}/track/${complaintId}?token=${shortToken}`;
-    console.log('[WhatsApp Webhook] Tracking Link Generated:', trackingLink);
     const complaintData = {
         id: complaintId,
         complaintId: complaintId,
@@ -591,7 +596,7 @@ async function createComplaintFromSession(from, session) {
         category: aiResult?.grievance_category || 'Civic Infrastructure',
         priority: aiResult?.severity || 'MEDIUM',
         district: session.district,
-        location: session.location || null,
+        location: session.location,
         isAnonymous: false,
         status: "Submitted",
         createdAt: new Date().toISOString(),
@@ -603,13 +608,6 @@ async function createComplaintFromSession(from, session) {
         trackingUrl: trackingLink,
         currentStep: 1,
         aiValidation: aiResult,
-        imageAnalysis: hasMedia ? {
-            imageSummary: aiResult?.reason || "Uploaded image evidence.",
-            relevance: aiResult?.image_relevant ?? true,
-            confidence: aiResult?.confidence || 80,
-            category: aiResult?.grievance_category || "General",
-            severity: aiResult?.severity || "MEDIUM"
-        } : null,
         trackingToken,
         trackingLink
     };
@@ -617,7 +615,6 @@ async function createComplaintFromSession(from, session) {
     try {
         const complaintDocRef = (0, firestore_1.doc)(firebase_1.db, 'complaints', complaintId);
         await (0, firestore_1.setDoc)(complaintDocRef, complaintData);
-        console.log('[WhatsApp Webhook] Complaint Created:', complaintId);
         // Step 9: Store ai_analysis
         await (0, firestore_1.addDoc)((0, firestore_1.collection)(firebase_1.db, 'ai_analysis'), {
             complaintId,
@@ -635,8 +632,6 @@ async function createComplaintFromSession(from, session) {
     catch (err) {
         console.warn('[WhatsApp Webhook] Firestore complaints save failed:', err.message);
     }
-    // Delete session
-    await deleteSession(from);
     // Step 11: Twilio SMS Confirmation
     const smsBody = `Dear Citizen, Your grievance has been successfully registered. Complaint ID: ${complaintId}. Track Your Complaint: ${trackingLink} - CM Grievance Portal`;
     try {
@@ -656,26 +651,43 @@ async function createComplaintFromSession(from, session) {
         console.error('[WhatsApp Webhook] Twilio SMS dispatch failed:', smsErr);
     }
     // Step 12: WhatsApp Confirmation message (using custom template)
-    const waReply = `Hello ${complaintData.citizenName},
+    const waReply = `🇮🇳 *Grievance Registered Successfully*
 
-Your grievance has been successfully registered.
+Hello ${complaintData.citizenName},
+
+Your complaint has been successfully submitted to the CM Grievance Portal.
+
+*Complaint ID*:
+${complaintId}
+
+*Current Status*:
+Submitted
+
+*Tracking Link*:
+${trackingLink}
+
+*Expected Resolution Timeline*:
+7 Working Days
+
+Thank you for reporting this issue. We will keep you updated on the progress.
+
+Chief Minister Governance Platform`;
+    await sendReply(from, waReply);
+    // Send exact final message closure (End Conversation After Success)
+    const finalMsg = `Your complaint has been successfully registered.
 
 Complaint ID:
 ${complaintId}
 
-Current Status:
-Submitted
-
-Track Here:
+Tracking Link:
 ${trackingLink}
 
-Expected Resolution Timeline:
-7-14 Working Days
+Thank you for using the CM Grievance Portal.
 
-Thank you.
-
-Chief Minister Grievance Portal`;
-    await sendReply(from, waReply);
+Have a good day.`;
+    await sendReply(from, finalMsg);
+    session.state = 'COMPLETED';
+    await saveSession(from, session);
     // Step 10: Trigger dashboard push notifications
     try {
         const backendUrl = (0, urlHelper_1.getBackendUrl)();
@@ -692,7 +704,6 @@ Chief Minister Grievance Portal`;
                 trackingLink
             })
         });
-        console.log('[WhatsApp Webhook] Status Updated to:', 'Submitted');
     }
     catch (err) {
         console.error('[WhatsApp Webhook] Failed to trigger live dashboard push:', err.message);
@@ -700,7 +711,6 @@ Chief Minister Grievance Portal`;
 }
 async function sendReply(to, text) {
     await (0, whatsappService_1.sendWhatsAppText)(to, text);
-    console.log('[WhatsApp Webhook] WhatsApp Sent to:', to);
     try {
         await (0, firestore_1.addDoc)((0, firestore_1.collection)(firebase_1.db, 'whatsapp_conversations'), {
             phone: to,
@@ -717,7 +727,6 @@ async function saveSession(phone, session) {
     try {
         const sessionDocRef = (0, firestore_1.doc)(firebase_1.db, 'whatsapp_sessions', phone);
         await (0, firestore_1.setDoc)(sessionDocRef, session);
-        console.log('[WhatsApp Webhook] Session Updated:', phone);
     }
     catch (err) {
         console.warn('[WhatsApp Webhook] Firestore save session failed:', err.message);
