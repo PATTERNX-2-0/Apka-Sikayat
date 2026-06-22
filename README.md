@@ -4,12 +4,42 @@
 
 ### *AI-Powered Smart Governance & Citizen Grievance Management Platform*
 
-[![Live Frontend](https://img.shields.io/badge/Live%20App-Vercel-black?style=for-the-badge&logo=vercel)](https://apka-sikayat.vercel.app)
-[![Backend](https://img.shields.io/badge/Backend%20API-Render-46E3B7?style=for-the-badge&logo=render)](https://apka-sikayat.onrender.com/health)
-[![Firebase](https://img.shields.io/badge/Database-Firebase-FFCA28?style=for-the-badge&logo=firebase&logoColor=black)](https://firebase.google.com)
-[![Next.js](https://img.shields.io/badge/Frontend-Next.js%2016-000000?style=for-the-badge&logo=next.js)](https://nextjs.org)
-[![TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6?style=for-the-badge&logo=typescript)](https://www.typescriptlang.org)
-[![Gemini AI](https://img.shields.io/badge/AI-Gemini%202.5%20Flash-4285F4?style=for-the-badge&logo=google)](https://ai.google.dev)
+<!-- Deployment -->
+[![Live Frontend](https://img.shields.io/badge/Live%20App-Vercel-000000?style=for-the-badge&logo=vercel)](https://apka-sikayat.vercel.app)
+[![Backend API](https://img.shields.io/badge/Backend%20API-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://apka-sikayat.onrender.com/health)
+
+<!-- Frontend -->
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=for-the-badge&logo=next.js)](https://nextjs.org)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178C6?style=for-the-badge&logo=typescript)](https://www.typescriptlang.org)
+[![TailwindCSS](https://img.shields.io/badge/TailwindCSS-4.x-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
+[![Framer Motion](https://img.shields.io/badge/Framer%20Motion-12.x-0055FF?style=for-the-badge&logo=framer)](https://www.framer.com/motion)
+
+<!-- Backend -->
+[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Express.js](https://img.shields.io/badge/Express.js-4.x-000000?style=for-the-badge&logo=express)](https://expressjs.com)
+[![Socket.IO](https://img.shields.io/badge/Socket.IO-4.x-010101?style=for-the-badge&logo=socket.io)](https://socket.io)
+
+<!-- Databases & Queue -->
+[![Firebase](https://img.shields.io/badge/Firebase-Firestore%20%26%20Auth-FFCA28?style=for-the-badge&logo=firebase&logoColor=black)](https://firebase.google.com)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-SMS%20Logs-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Redis](https://img.shields.io/badge/Redis-BullMQ%20Queue-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
+[![BullMQ](https://img.shields.io/badge/BullMQ-Job%20Queue-D6224E?style=for-the-badge&logo=bull&logoColor=white)](https://docs.bullmq.io)
+
+<!-- AI & Vector -->
+[![Gemini AI](https://img.shields.io/badge/Gemini%202.5%20Flash-LLM%20%26%20Vision-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
+[![Pinecone](https://img.shields.io/badge/Pinecone-Vector%20Database-000000?style=for-the-badge&logo=pinecone&logoColor=white)](https://www.pinecone.io)
+
+<!-- Notifications -->
+[![Twilio](https://img.shields.io/badge/Twilio-SMS-F22F46?style=for-the-badge&logo=twilio&logoColor=white)](https://www.twilio.com)
+[![WhatsApp](https://img.shields.io/badge/WhatsApp%20Business-Notifications-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://business.whatsapp.com)
+[![FCM](https://img.shields.io/badge/Firebase%20FCM-Push%20Notifications-FFCA28?style=for-the-badge&logo=firebase&logoColor=black)](https://firebase.google.com/products/cloud-messaging)
+
+<!-- UI Libraries -->
+[![Recharts](https://img.shields.io/badge/Recharts-Charts%20%26%20Analytics-22B5BF?style=for-the-badge&logo=chartdotjs&logoColor=white)](https://recharts.org)
+[![Leaflet.js](https://img.shields.io/badge/Leaflet.js-Interactive%20Maps-199900?style=for-the-badge&logo=leaflet&logoColor=white)](https://leafletjs.com)
+[![PDFKit](https://img.shields.io/badge/PDFKit-PDF%20Generation-E74C3C?style=for-the-badge&logo=adobeacrobatreader&logoColor=white)](https://pdfkit.org)
+[![Zod](https://img.shields.io/badge/Zod-Schema%20Validation-3E67B1?style=for-the-badge&logo=zod&logoColor=white)](https://zod.dev)
 
 > A full-stack, enterprise-grade smart governance platform that digitizes the entire lifecycle of citizen complaints — from AI-powered submission validation to real-time tracking, WhatsApp/SMS notifications, and Chief Minister executive intelligence dashboards powered by RAG (Retrieval-Augmented Generation) and Pinecone vector stores.
 
