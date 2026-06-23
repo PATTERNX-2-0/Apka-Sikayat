@@ -138,9 +138,24 @@ async function transcribeVoiceNote(base64Audio: string, mimeType: string): Promi
 }
 
 /**
- * Extract clean person name using Gemini entity extraction
+ * Extract clean person name — fast local fallback first, then Gemini as backup
  */
 async function extractCleanName(text: string): Promise<string | null> {
+  // --- Step 1: Local fast-path extraction (no API call needed) ---
+  // Strip common conversational prefixes in English, Hindi, Bengali
+  const prefixPattern = /^(?:my\s+name\s+is|i\s+am|i'm|myself|this\s+is|amer\s+na[m]e?|mera\s+naam|mera\s+name|naam\s+hai|bolchhi|am|name\s+is|name:)\s*/i;
+  const stripped = text.trim().replace(prefixPattern, '').trim();
+
+  // Accept if it looks like a real name: 1–4 words, each starting with a letter, only letters/spaces/dots/hyphens
+  const namePattern = /^[A-Za-z][A-Za-z.\-']*(?:\s+[A-Za-z][A-Za-z.\-']*){0,3}$/;
+  if (namePattern.test(stripped) && stripped.length >= 2) {
+    // Capitalize each word for consistency
+    const capitalized = stripped.replace(/\b\w/g, (c) => c.toUpperCase());
+    console.log(`[extractCleanName] Local match: "${capitalized}"`);
+    return capitalized;
+  }
+
+  // --- Step 2: Gemini AI fallback for complex/regional inputs ---
   const apiKey = process.env.WHATSAPP_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
   if (!apiKey) return null;
 
