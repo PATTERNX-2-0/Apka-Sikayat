@@ -6,6 +6,7 @@ import { generateTrackingToken, getAppUrl, getBackendUrl, generateNextComplaintI
 import { sendTwilioSMS } from '../services/twilioService';
 import { db } from '../../firebase';
 import { doc, getDoc, setDoc, addDoc, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
+import bcrypt from 'bcryptjs';
 
 const VERIFY_TOKEN = 'apka_sikayat_whatsapp_token';
 
@@ -419,15 +420,33 @@ export async function handleWebhookEvent(req: Request, res: Response) {
       const emailMatch = userText.match(emailRegex);
       if (emailMatch) {
         session.email = emailMatch[0];
-        session.state = 'CONFIRMING_PHONE';
+        session.state = 'COLLECTING_PASSWORD';
         await saveSession(from, session);
         await sendReply(
           from,
-          `We detected your WhatsApp number:\n+${from}\n\nWould you like to use this number for updates?\n\nReply YES or NO.`
+          `✅ Email saved!\n\nNow please create a *password* for your Apka Shikayat web portal account.\n\n🔒 Your password must be at least 6 characters long.\n\nYou will use this password to log into the website and view your submitted grievances.`
         );
       } else {
         await sendReply(from, "Please enter a valid email address:");
       }
+      return;
+    }
+
+    // Onboarding Step 2b: COLLECTING_PASSWORD
+    if (session.state === 'COLLECTING_PASSWORD') {
+      const pwd = userText.trim();
+      if (pwd.length < 6) {
+        await sendReply(from, "❌ Password is too short. Please enter a password with at least 6 characters:");
+        return;
+      }
+      // Store the plain-text password temporarily in session (will be hashed on profile save)
+      session.plainPassword = pwd;
+      session.state = 'CONFIRMING_PHONE';
+      await saveSession(from, session);
+      await sendReply(
+        from,
+        `🔐 Password set successfully!\n\nWe detected your WhatsApp number:\n+${from}\n\nWould you like to use this number for updates?\n\nReply YES or NO.`
+      );
       return;
     }
 
@@ -478,6 +497,18 @@ export async function handleWebhookEvent(req: Request, res: Response) {
         await saveSession(from, session);
 
         // Profile is saved ONLY after YES confirmation
+        // Hash the password before storing — never store plain text
+        let passwordHash = '';
+        if (session.plainPassword) {
+          try {
+            passwordHash = await bcrypt.hash(session.plainPassword, 10);
+          } catch (hashErr: any) {
+            console.warn('[WhatsApp Webhook] Password hashing failed:', hashErr.message);
+          }
+          // Clear plain-text password from session immediately after hashing
+          session.plainPassword = undefined;
+        }
+
         const userProfile = {
           uid: `wa_${from}`,
           fullName: session.fullName,
@@ -486,11 +517,12 @@ export async function handleWebhookEvent(req: Request, res: Response) {
           district: session.district || 'South West Delhi',
           role: 'Citizen',
           registrationSource: 'WhatsApp',
-          joinedDate: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+          joinedDate: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
+          ...(passwordHash && { passwordHash })
         };
         try {
           await setDoc(doc(db, 'users', `wa_${from}`), userProfile);
-          console.log('[WhatsApp Webhook] Profile Saved:', `wa_${from}`);
+          console.log('[WhatsApp Webhook] Profile Saved with passwordHash:', `wa_${from}`);
         } catch (err: any) {
           console.warn('[WhatsApp Webhook] Profile save failed:', err.message);
         }

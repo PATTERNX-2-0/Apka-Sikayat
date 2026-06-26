@@ -89,7 +89,12 @@ function LoginContent() {
       }
     } catch (err: any) {
       console.error("Login error:", err);
-      if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
+      if (err.message === 'WHATSAPP_USER_NO_CUSTOM_TOKEN') {
+        setErrorMsg("Your WhatsApp account was found, but the server is not fully configured to issue a login token. Please contact support.");
+      } else if (err.message && !err.code) {
+        // Backend returned a clear error message (e.g., "Invalid email or password.")
+        setErrorMsg(err.message);
+      } else if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
         setErrorMsg("Invalid email or password.");
       } else {
         setErrorMsg(err.message || "Failed to sign in. Please try again.");

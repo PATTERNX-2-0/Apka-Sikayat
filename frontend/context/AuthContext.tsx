@@ -6,6 +6,7 @@ import {
   createUserWithEmailAndPassword, 
   signOut as firebaseSignOut, 
   onAuthStateChanged, 
+  signInWithCustomToken,
   User 
 } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
@@ -190,6 +191,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         return newUser;
       }
+
+      // --- WhatsApp Citizen Fallback ---
+      // If Firebase Auth fails (WhatsApp citizens are not in Firebase Auth),
+      // try our backend citizen-login endpoint which verifies against Firestore passwordHash.
+      const isAuthError = (
+        error.code === "auth/user-not-found" ||
+        error.code === "auth/invalid-credential" ||
+        error.code === "auth/wrong-password" ||
+        error.code === "auth/invalid-email"
+      );
+      if (isAuthError) {
+        try {
+          const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+          const response = await fetch(`${backendUrl}/api/citizen-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+
+            if (data.customToken) {
+              // Full Firebase session via custom token
+              const customCred = await signInWithCustomToken(auth, data.customToken);
+              return customCred.user;
+            }
+
+            // Fallback: no custom token — store profile manually and return a synthetic session
+            // This happens when Firebase Admin SDK is not fully configured
+            if (data.noCustomToken && data.uid) {
+              // We can't return a real User without a Firebase session.
+              // Surface a specific error so the login page can show a helpful message.
+              throw new Error('WHATSAPP_USER_NO_CUSTOM_TOKEN');
+            }
+          } else {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error || 'Invalid email or password.');
+          }
+        } catch (fallbackErr: any) {
+          // If it's our specific error, re-throw as-is
+          if (fallbackErr.message === 'WHATSAPP_USER_NO_CUSTOM_TOKEN') throw fallbackErr;
+          // If the backend said 401, rethrow with a clean message
+          if (fallbackErr.message && fallbackErr.message !== 'WHATSAPP_USER_NO_CUSTOM_TOKEN') {
+            throw fallbackErr;
+          }
+        }
+      }
+
       throw error;
     }
   };
