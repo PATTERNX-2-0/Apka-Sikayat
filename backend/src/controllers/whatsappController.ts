@@ -295,6 +295,56 @@ export async function handleWebhookEvent(req: Request, res: Response) {
   const from = message.from;
   const textBody = message.text?.body?.trim() || '';
 
+  // Call Me Intent Detection
+  if (textBody.toLowerCase() === 'call me') {
+    console.log(`[WhatsApp Webhook] "Call Me" intent detected from ${from}. Checking database...`);
+    try {
+      const database = isFirebaseAdminInitialized && adminDb ? adminDb : null;
+      let citizenDoc: any = null;
+      
+      // Query users collection by phone
+      if (database) {
+        const snap = await database.collection('users').where('phone', 'in', [`+${from}`, from]).limit(1).get();
+        if (!snap.empty) citizenDoc = snap.docs[0].data();
+      } else {
+        const q = query(collection(db, 'users'), where('phone', 'in', [`+${from}`, from]));
+        const snap = await getDocs(q);
+        if (!snap.empty) citizenDoc = snap.docs[0].data();
+      }
+
+      if (!citizenDoc) {
+        // Fallback: query complaints collection by phone
+        let complaintDoc: any = null;
+        if (database) {
+          const snap = await database.collection('complaints').where('phoneNumber', 'in', [`+${from}`, from]).limit(1).get();
+          if (!snap.empty) complaintDoc = snap.docs[0].data();
+        } else {
+          const q = query(collection(db, 'complaints'), where('phoneNumber', 'in', [`+${from}`, from]));
+          const snap = await getDocs(q);
+          if (!snap.empty) complaintDoc = snap.docs[0].data();
+        }
+        if (complaintDoc) {
+          citizenDoc = { fullName: complaintDoc.citizenName || 'Citizen', phone: complaintDoc.phoneNumber || `+${from}` };
+        }
+      }
+
+      if (!citizenDoc) {
+        console.log(`[WhatsApp Webhook] Citizen profile not found for ${from}. Requesting phone sharing.`);
+        await sendWhatsAppText(from, "Please share your phone number so I can call you.");
+        return;
+      }
+
+      console.log(`[WhatsApp Webhook] Citizen verified: ${citizenDoc.fullName} (${citizenDoc.phone}). Triggering VAPI call...`);
+      await sendWhatsAppText(from, `Connecting you to our AI Voice Governance Agent. Please expect a phone call on ${citizenDoc.phone} shortly...`);
+
+      const { triggerVapiOutboundCall } = require('../services/vapiService');
+      await triggerVapiOutboundCall(citizenDoc.phone, citizenDoc.fullName);
+    } catch (err: any) {
+      console.error('[WhatsApp Webhook] Call Me trigger failure:', err.message);
+    }
+    return;
+  }
+
   // Get active session strictly isolated by phoneNumber
   let session: any = null;
   try {

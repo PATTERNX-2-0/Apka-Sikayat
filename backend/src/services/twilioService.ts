@@ -104,3 +104,44 @@ export async function sendTwilioSMS(to: string, body: string): Promise<TwilioSen
     throw new Error(`Twilio delivery failed: ${error.message}`);
   }
 }
+
+/**
+ * Initiates an automated interactive voice call to ask the citizen for details.
+ */
+export async function makeAIVoiceCall(to: string, complaintId: string, title: string): Promise<any> {
+  console.log(`[Twilio Service] Initiating Voice call to ${to} for complaint ${complaintId}...`);
+
+  let formattedTo = to.trim().replace(/[\s\-\(\)]/g, '');
+  if (!formattedTo.startsWith('+')) {
+    if (formattedTo.startsWith('0')) formattedTo = formattedTo.substring(1);
+    if (formattedTo.length === 10) formattedTo = `+91${formattedTo}`;
+    else formattedTo = `+${formattedTo}`;
+  }
+
+  const fromNumber = PHONE_NUMBER || '+12565888126';
+  const formattedFrom = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
+
+  if (!twilioClient) {
+    console.log('[Twilio Service] [Simulator] Logging mock Voice call trigger.');
+    return { sid: `CA${Math.random().toString(36).substring(7)}`, status: 'queued' };
+  }
+
+  try {
+    const call = await twilioClient.calls.create({
+      twiml: `<Response>
+        <Say voice="alice">Hello Citizen, thank you for submitting your grievance regarding ${title || 'your request'}. We have successfully registered your complaint under ID ${complaintId}.</Say>
+        <Say voice="alice">Could you please tell me, where is the location exactly now, and what is the exact matter which is held in now?</Say>
+        <Record maxLength="20" playBeep="true" />
+        <Say voice="alice">Thank you for your feedback. Our AI validation engine has successfully recorded your response and verified your grievance.</Say>
+      </Response>`,
+      to: formattedTo,
+      from: formattedFrom
+    });
+
+    console.log(`[Twilio Service] Voice call initiated successfully. Call SID: ${call.sid}`);
+    return { sid: call.sid, status: 'queued' };
+  } catch (err: any) {
+    console.error('[Twilio Service] Voice call creation failed:', err.message);
+    return { error: err.message };
+  }
+}

@@ -21,6 +21,7 @@ export interface UserProfile {
   address: string;
   role: string; // 'Citizen' | 'Officer' | 'Dept Head' | 'CM Office'
   joinedDate: string;
+  mlaId?: string;
 }
 
 interface AuthContextType {
@@ -105,6 +106,17 @@ const getDemoProfileData = (email: string, uid: string): UserProfile => {
       role: "State Administrator",
       joinedDate: defaultJoined
     };
+  } else if (email === "mla@demo.com") {
+    return {
+      uid,
+      fullName: "Shri Ankit Kumar (MLA)",
+      email,
+      phone: "+91 9999912345",
+      district: "New Delhi",
+      address: "MLA Office, Connaught Place, New Delhi",
+      role: "MLA",
+      joinedDate: defaultJoined
+    };
   } else if (email === "superadmin@demo.com") {
     return {
       uid,
@@ -176,6 +188,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         "cm@demo.com",
         "district@demo.com",
         "stateadmin@demo.com",
+        "mla@demo.com",
         "superadmin@demo.com"
       ].includes(email);
       if (isDemo && (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential" || error.code === "auth/invalid-email")) {
@@ -202,47 +215,82 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error.code === "auth/invalid-email"
       );
       if (isAuthError) {
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+        console.log(`[AuthContext] Firebase Auth failed (${error.code}). Trying WhatsApp citizen fallback at ${backendUrl}/api/citizen-login...`);
+
+        let backendResponse: Response;
         try {
-          const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
-          const response = await fetch(`${backendUrl}/api/citizen-login`, {
+          backendResponse = await fetch(`${backendUrl}/api/citizen-login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
           });
+        } catch (networkErr: any) {
+          // Backend is not reachable (not running or wrong URL)
+          console.error('[AuthContext] Backend unreachable for citizen-login:', networkErr.message);
+          throw new Error(
+            'Could not reach the login server. Please make sure the backend is running, or try again shortly.'
+          );
+        }
 
-          if (response.ok) {
-            const data = await response.json();
+        const data = await backendResponse.json().catch(() => ({}));
+        console.log('[AuthContext] citizen-login response:', backendResponse.status, data);
 
-            if (data.customToken) {
-              // Full Firebase session via custom token
-              const customCred = await signInWithCustomToken(auth, data.customToken);
-              return customCred.user;
+        if (!backendResponse.ok) {
+          // Backend returned a clear error (401 = wrong password / user not found)
+          throw new Error(data.error || 'Invalid email or password.');
+        }
+
+        if (data.customToken) {
+          // Full Firebase session via custom token (when Firebase Admin is configured)
+          console.log('[AuthContext] Signing in with custom token for WhatsApp citizen...');
+          const customCred = await signInWithCustomToken(auth, data.customToken);
+          return customCred.user;
+        }
+
+        if (data.noCustomToken && data.uid && data.email) {
+          // Firebase Admin not configured — create a Firebase Auth account on-the-fly
+          // The password has already been verified by the backend at this point.
+          console.log('[AuthContext] No custom token available. Creating Firebase Auth account for WhatsApp citizen...');
+          try {
+            const newCred = await createUserWithEmailAndPassword(auth, data.email, password);
+            const newUser = newCred.user;
+
+            // Link the existing Firestore profile (wa_{phone}) to the new Firebase Auth UID
+            // so all their complaints (uid: wa_{phone}) remain visible
+            const existingProfile = {
+              uid: data.uid, // keep original wa_{phone} uid for complaint matching
+              firebaseUid: newUser.uid, // new Firebase Auth UID
+              fullName: data.fullName,
+              email: data.email,
+              phone: data.phone || '',
+              district: data.district || '',
+              address: data.address || '',
+              role: data.role || 'Citizen',
+              registrationSource: 'WhatsApp',
+              joinedDate: data.joinedDate || new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+            };
+            // Save profile under Firebase Auth UID so AuthContext can load it
+            await setDoc(doc(db, 'users', newUser.uid), existingProfile);
+            setProfile(existingProfile as UserProfile);
+            return newUser;
+          } catch (createErr: any) {
+            if (createErr.code === 'auth/email-already-in-use') {
+              // Account was already linked previously — just sign in
+              const existingCred = await signInWithEmailAndPassword(auth, data.email, password);
+              return existingCred.user;
             }
-
-            // Fallback: no custom token — store profile manually and return a synthetic session
-            // This happens when Firebase Admin SDK is not fully configured
-            if (data.noCustomToken && data.uid) {
-              // We can't return a real User without a Firebase session.
-              // Surface a specific error so the login page can show a helpful message.
-              throw new Error('WHATSAPP_USER_NO_CUSTOM_TOKEN');
-            }
-          } else {
-            const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.error || 'Invalid email or password.');
-          }
-        } catch (fallbackErr: any) {
-          // If it's our specific error, re-throw as-is
-          if (fallbackErr.message === 'WHATSAPP_USER_NO_CUSTOM_TOKEN') throw fallbackErr;
-          // If the backend said 401, rethrow with a clean message
-          if (fallbackErr.message && fallbackErr.message !== 'WHATSAPP_USER_NO_CUSTOM_TOKEN') {
-            throw fallbackErr;
+            throw new Error('Could not create your web account. Please contact support.');
           }
         }
+
+        console.warn('[AuthContext] citizen-login returned ok but no token or uid:', data);
       }
 
       throw error;
     }
   };
+
 
   const signUp = async (email: string, password: string, fullName: string, phone: string): Promise<User> => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);

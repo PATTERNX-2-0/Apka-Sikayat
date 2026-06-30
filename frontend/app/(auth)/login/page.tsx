@@ -20,6 +20,7 @@ const DEMO_ACCOUNTS = [
   { role: 'CM Office', email: 'cm@demo.com' },
   { role: 'District Mgr', email: 'district@demo.com' },
   { role: 'State Admin', email: 'stateadmin@demo.com' },
+  { role: 'MLA', email: 'mla@demo.com' },
   { role: 'Super Admin', email: 'superadmin@demo.com' },
 ];
 
@@ -36,7 +37,7 @@ function LoginContent() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
-  const { register, handleSubmit, setValue, formState: { errors } } = useForm<LoginFormValues>({
+  const { register, handleSubmit, setValue, formState: { errors }, watch } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
   });
 
@@ -65,6 +66,8 @@ function LoginContent() {
           role = 'District Manager';
         } else if (data.email === 'stateadmin@demo.com') {
           role = 'State Administrator';
+        } else if (data.email === 'mla@demo.com') {
+          role = 'MLA';
         } else if (data.email === 'superadmin@demo.com') {
           role = 'Super Admin';
         }
@@ -82,6 +85,8 @@ function LoginContent() {
         router.push('/district');
       } else if (role === 'State Administrator') {
         router.push('/state-admin');
+      } else if (role === 'MLA') {
+        router.push('/mla');
       } else if (role === 'Super Admin') {
         router.push('/super-admin');
       } else {
@@ -89,10 +94,8 @@ function LoginContent() {
       }
     } catch (err: any) {
       console.error("Login error:", err);
-      if (err.message === 'WHATSAPP_USER_NO_CUSTOM_TOKEN') {
-        setErrorMsg("Your WhatsApp account was found, but the server is not fully configured to issue a login token. Please contact support.");
-      } else if (err.message && !err.code) {
-        // Backend returned a clear error message (e.g., "Invalid email or password.")
+      if (err.message && !err.code) {
+        // Errors from our backend or network — show message directly
         setErrorMsg(err.message);
       } else if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
         setErrorMsg("Invalid email or password.");

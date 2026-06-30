@@ -10,7 +10,7 @@ import { useDropzone } from 'react-dropzone';
 import { 
   FileText, MapPin, UploadCloud, Camera, Video, 
   Mic, ShieldAlert, ArrowRight, EyeOff, File,
-  Brain, Loader2, CheckCircle2, AlertTriangle
+  Brain, Loader2, CheckCircle2, AlertTriangle, AlertCircle
 } from 'lucide-react';
 import { complaintSchema, ComplaintFormValues, CATEGORIES, DISTRICTS } from '@/lib/validations/complaint';
 import { useAuth } from '@/context/AuthContext';
@@ -25,6 +25,35 @@ export default function SubmitComplaintPage() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
+  
+  // Geolocation & Fallbacks
+  const [gpsDenied, setGpsDenied] = useState(false);
+  const [accuracy, setAccuracy] = useState<number | null>(null);
+  const [coords, setCoords] = useState<{ lat: number, lng: number } | null>(null);
+  const [manualState, setManualState] = useState('');
+  const [manualDistrict, setManualDistrict] = useState('');
+  const [manualBlock, setManualBlock] = useState('');
+  const [manualWard, setManualWard] = useState('');
+  const [manualPincode, setManualPincode] = useState('');
+
+  React.useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+          setAccuracy(pos.coords.accuracy);
+          setGpsDenied(false);
+          setValue('location', { lat: pos.coords.latitude, lng: pos.coords.longitude });
+        },
+        (err) => {
+          console.warn("GPS Permission denied:", err.message);
+          setGpsDenied(true);
+        }
+      );
+    } else {
+      setGpsDenied(true);
+    }
+  }, []);
   
   // AI Validation States
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -166,10 +195,18 @@ export default function SubmitComplaintPage() {
         priority: data.priority,
         district: data.district,
         location: {
-          lat: data.location.lat,
-          lng: data.location.lng,
+          lat: data.location.lat || coords?.lat || 28.6139,
+          lng: data.location.lng || coords?.lng || 77.2090,
           address: data.location.address || `${data.district}, Delhi`
         },
+        latitude: data.location.lat || coords?.lat || 28.6139,
+        longitude: data.location.lng || coords?.lng || 77.2090,
+        accuracy: accuracy || 15,
+        manualState: manualState || '',
+        manualDistrict: manualDistrict || data.district || '',
+        manualBlock: manualBlock || '',
+        manualWard: manualWard || '',
+        manualPincode: manualPincode || '',
         isAnonymous: data.isAnonymous || false,
         status: "Submitted",
         createdAt: new Date().toISOString(),
@@ -293,6 +330,38 @@ export default function SubmitComplaintPage() {
             </h2>
             
             <div className="space-y-4">
+              {gpsDenied && (
+                <div className="p-4 bg-orange-50 rounded-xl border border-orange-100 mb-4">
+                  <p className="text-xs font-bold text-[#FF9933] uppercase tracking-wider flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4" /> GPS Permission Denied / Bypassed
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">Please provide your administrative details below to auto-route your complaint.</p>
+                  
+                  <div className="grid grid-cols-2 gap-3 mt-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase">State</label>
+                      <input type="text" value={manualState} onChange={(e) => setManualState(e.target.value)} placeholder="e.g. Delhi" className="w-full px-3 py-2 text-xs rounded-lg border border-gray-200 mt-1 bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase">District</label>
+                      <input type="text" value={manualDistrict} onChange={(e) => setManualDistrict(e.target.value)} placeholder="e.g. New Delhi" className="w-full px-3 py-2 text-xs rounded-lg border border-gray-200 mt-1 bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase">Block</label>
+                      <input type="text" value={manualBlock} onChange={(e) => setManualBlock(e.target.value)} placeholder="e.g. Chanakyapuri" className="w-full px-3 py-2 text-xs rounded-lg border border-gray-200 mt-1 bg-white" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase">Ward / Village</label>
+                      <input type="text" value={manualWard} onChange={(e) => setManualWard(e.target.value)} placeholder="e.g. Ward 12" className="w-full px-3 py-2 text-xs rounded-lg border border-gray-200 mt-1 bg-white" />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase">Pin Code</label>
+                      <input type="text" value={manualPincode} onChange={(e) => setManualPincode(e.target.value)} placeholder="e.g. 110001" className="w-full px-3 py-2 text-xs rounded-lg border border-gray-200 mt-1 bg-white" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">District</label>
                 <select {...register('district')} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#87CEEB] bg-gray-50/50">

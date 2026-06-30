@@ -31,7 +31,10 @@ import {
   getBriefingsArchive,
   handleBriefingGeneration,
   getAuditsDashboard,
-  getPolicyRecommendations
+  getPolicyRecommendations,
+  getMLAComplaints,
+  handleMLACopilotChat,
+  handleMLAVisitIntelligence
 } from './controllers/copilotController';
 
 // Load environment variables
@@ -58,6 +61,10 @@ const io = new Server(server, {
     credentials: true
   }
 });
+
+// Link io instance to VAPI Webhook controller for live dashboard updates
+const { setIoInstance } = require('./controllers/vapiWebhookController');
+setIoInstance(io);
 
 // Configure Socket.IO Redis Adapter for horizontal scaling if Redis is configured
 if (process.env.REDIS_HOST) {
@@ -87,7 +94,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 5002;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'a6522c015840d803becc2ebb49edc4a7';
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 
 // Real-time WebSockets logic
 io.on('connection', (socket) => {
@@ -313,6 +320,14 @@ app.get('/api/cm/copilot/briefings', getBriefingsArchive);
 app.post('/api/cm/copilot/briefings/generate', handleBriefingGeneration);
 app.get('/api/cm/copilot/audits', getAuditsDashboard);
 app.get('/api/cm/copilot/policies', getPolicyRecommendations);
+
+// MLA PORTAL API ENDPOINTS
+app.get('/api/mla/complaints', getMLAComplaints);
+app.post('/api/mla/copilot/chat', handleMLACopilotChat);
+app.post('/api/mla/copilot/visit', handleMLAVisitIntelligence);
+
+// VAPI VOICE AGENT API ENDPOINT
+app.post('/api/vapi/webhook', require('./controllers/vapiWebhookController').handleVapiWebhook);
 
 // 4. Internal Endpoint: Trigger Real-time broadcast (Called by worker)
 app.post('/api/internal/broadcast', (req, res) => {
@@ -614,6 +629,14 @@ server.listen(PORT, async () => {
   await initDatabase();
   await initRateLimiter();
   await initSMSQueue();
+
+  // Seed MLA Portal database collections
+  try {
+    const { seedMLAPortalData } = require('./services/seedService');
+    await seedMLAPortalData();
+  } catch (err: any) {
+    console.error('[API Server] Seeding failed:', err.message);
+  }
 
   // Start real-time Firestore listener for heatmap
   startFirebaseListener(io);
