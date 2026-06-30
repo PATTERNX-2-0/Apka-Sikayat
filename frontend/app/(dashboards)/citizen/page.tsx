@@ -17,22 +17,36 @@ export default function CitizenDashboardOverview() {
     const fetchComplaints = async () => {
       if (!user) return;
       try {
-        const q = query(collection(db, "complaints"), where("uid", "==", user.uid));
-        const querySnapshot = await getDocs(q);
-        const list: any[] = [];
         const mockIds = ["CMP-1008", "CMP-1007", "CMP-1006", "CMP-1005", "CMP-1004", "CMP-1003", "CMP-1002", "CMP-1001"];
-        
-        for (const docSnap of querySnapshot.docs) {
+        const allDocs = new Map<string, any>(); // deduplicate by doc ID
+
+        // Query 1: by Firebase Auth UID (normal registered citizens)
+        const q1 = query(collection(db, "complaints"), where("uid", "==", user.uid));
+        const snap1 = await getDocs(q1);
+        for (const docSnap of snap1.docs) {
           if (mockIds.includes(docSnap.id)) {
-            try {
-              await deleteDoc(docSnap.ref);
-            } catch (err) {
-              console.error("Failed to delete mock document:", docSnap.id, err);
-            }
+            try { await deleteDoc(docSnap.ref); } catch {}
           } else {
-            list.push(docSnap.data());
+            allDocs.set(docSnap.id, docSnap.data());
           }
         }
+
+        // Query 2: by original WhatsApp uid (wa_{phone}) stored in profile.uid
+        // WhatsApp citizens have a different uid in complaints vs their Firebase Auth uid
+        const whatsappUid = (profile as any)?.uid;
+        if (whatsappUid && whatsappUid !== user.uid && whatsappUid.startsWith('wa_')) {
+          const q2 = query(collection(db, "complaints"), where("uid", "==", whatsappUid));
+          const snap2 = await getDocs(q2);
+          for (const docSnap of snap2.docs) {
+            if (mockIds.includes(docSnap.id)) {
+              try { await deleteDoc(docSnap.ref); } catch {}
+            } else {
+              allDocs.set(docSnap.id, docSnap.data());
+            }
+          }
+        }
+
+        const list = Array.from(allDocs.values());
         
         // Sort by date/createdAt descending
         list.sort((a, b) => {
@@ -50,7 +64,8 @@ export default function CitizenDashboardOverview() {
     };
 
     fetchComplaints();
-  }, [user]);
+  }, [user, profile]);
+
 
   // Dynamic Metrics Calculation
   const total = complaints.length;

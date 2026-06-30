@@ -6,6 +6,7 @@ import { generateTrackingToken, getAppUrl, getBackendUrl, generateNextComplaintI
 import { sendTwilioSMS } from '../services/twilioService';
 import { db } from '../../firebase';
 import { doc, getDoc, setDoc, addDoc, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
+import bcrypt from 'bcryptjs';
 
 const VERIFY_TOKEN = 'apka_sikayat_whatsapp_token';
 
@@ -138,9 +139,24 @@ async function transcribeVoiceNote(base64Audio: string, mimeType: string): Promi
 }
 
 /**
- * Extract clean person name using Gemini entity extraction
+ * Extract clean person name — fast local fallback first, then Gemini as backup
  */
 async function extractCleanName(text: string): Promise<string | null> {
+  // --- Step 1: Local fast-path extraction (no API call needed) ---
+  // Strip common conversational prefixes in English, Hindi, Bengali
+  const prefixPattern = /^(?:my\s+name\s+is|i\s+am|i'm|myself|this\s+is|amer\s+na[m]e?|mera\s+naam|mera\s+name|naam\s+hai|bolchhi|am|name\s+is|name:)\s*/i;
+  const stripped = text.trim().replace(prefixPattern, '').trim();
+
+  // Accept if it looks like a real name: 1–4 words, each starting with a letter, only letters/spaces/dots/hyphens
+  const namePattern = /^[A-Za-z][A-Za-z.\-']*(?:\s+[A-Za-z][A-Za-z.\-']*){0,3}$/;
+  if (namePattern.test(stripped) && stripped.length >= 2) {
+    // Capitalize each word for consistency
+    const capitalized = stripped.replace(/\b\w/g, (c) => c.toUpperCase());
+    console.log(`[extractCleanName] Local match: "${capitalized}"`);
+    return capitalized;
+  }
+
+  // --- Step 2: Gemini AI fallback for complex/regional inputs ---
   const apiKey = process.env.WHATSAPP_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_CITIZEN;
   if (!apiKey) return null;
 
@@ -279,6 +295,56 @@ export async function handleWebhookEvent(req: Request, res: Response) {
   const from = message.from;
   const textBody = message.text?.body?.trim() || '';
 
+  // Call Me Intent Detection
+  if (textBody.toLowerCase() === 'call me') {
+    console.log(`[WhatsApp Webhook] "Call Me" intent detected from ${from}. Checking database...`);
+    try {
+      const database = isFirebaseAdminInitialized && adminDb ? adminDb : null;
+      let citizenDoc: any = null;
+      
+      // Query users collection by phone
+      if (database) {
+        const snap = await database.collection('users').where('phone', 'in', [`+${from}`, from]).limit(1).get();
+        if (!snap.empty) citizenDoc = snap.docs[0].data();
+      } else {
+        const q = query(collection(db, 'users'), where('phone', 'in', [`+${from}`, from]));
+        const snap = await getDocs(q);
+        if (!snap.empty) citizenDoc = snap.docs[0].data();
+      }
+
+      if (!citizenDoc) {
+        // Fallback: query complaints collection by phone
+        let complaintDoc: any = null;
+        if (database) {
+          const snap = await database.collection('complaints').where('phoneNumber', 'in', [`+${from}`, from]).limit(1).get();
+          if (!snap.empty) complaintDoc = snap.docs[0].data();
+        } else {
+          const q = query(collection(db, 'complaints'), where('phoneNumber', 'in', [`+${from}`, from]));
+          const snap = await getDocs(q);
+          if (!snap.empty) complaintDoc = snap.docs[0].data();
+        }
+        if (complaintDoc) {
+          citizenDoc = { fullName: complaintDoc.citizenName || 'Citizen', phone: complaintDoc.phoneNumber || `+${from}` };
+        }
+      }
+
+      if (!citizenDoc) {
+        console.log(`[WhatsApp Webhook] Citizen profile not found for ${from}. Requesting phone sharing.`);
+        await sendWhatsAppText(from, "Please share your phone number so I can call you.");
+        return;
+      }
+
+      console.log(`[WhatsApp Webhook] Citizen verified: ${citizenDoc.fullName} (${citizenDoc.phone}). Triggering VAPI call...`);
+      await sendWhatsAppText(from, `Connecting you to our AI Voice Governance Agent. Please expect a phone call on ${citizenDoc.phone} shortly...`);
+
+      const { triggerVapiOutboundCall } = require('../services/vapiService');
+      await triggerVapiOutboundCall(citizenDoc.phone, citizenDoc.fullName);
+    } catch (err: any) {
+      console.error('[WhatsApp Webhook] Call Me trigger failure:', err.message);
+    }
+    return;
+  }
+
   // Get active session strictly isolated by phoneNumber
   let session: any = null;
   try {
@@ -404,15 +470,33 @@ export async function handleWebhookEvent(req: Request, res: Response) {
       const emailMatch = userText.match(emailRegex);
       if (emailMatch) {
         session.email = emailMatch[0];
-        session.state = 'CONFIRMING_PHONE';
+        session.state = 'COLLECTING_PASSWORD';
         await saveSession(from, session);
         await sendReply(
           from,
-          `We detected your WhatsApp number:\n+${from}\n\nWould you like to use this number for updates?\n\nReply YES or NO.`
+          `✅ Email saved!\n\nNow please create a *password* for your Apka Shikayat web portal account.\n\n🔒 Your password must be at least 6 characters long.\n\nYou will use this password to log into the website and view your submitted grievances.`
         );
       } else {
         await sendReply(from, "Please enter a valid email address:");
       }
+      return;
+    }
+
+    // Onboarding Step 2b: COLLECTING_PASSWORD
+    if (session.state === 'COLLECTING_PASSWORD') {
+      const pwd = userText.trim();
+      if (pwd.length < 6) {
+        await sendReply(from, "❌ Password is too short. Please enter a password with at least 6 characters:");
+        return;
+      }
+      // Store the plain-text password temporarily in session (will be hashed on profile save)
+      session.plainPassword = pwd;
+      session.state = 'CONFIRMING_PHONE';
+      await saveSession(from, session);
+      await sendReply(
+        from,
+        `🔐 Password set successfully!\n\nWe detected your WhatsApp number:\n+${from}\n\nWould you like to use this number for updates?\n\nReply YES or NO.`
+      );
       return;
     }
 
@@ -463,6 +547,18 @@ export async function handleWebhookEvent(req: Request, res: Response) {
         await saveSession(from, session);
 
         // Profile is saved ONLY after YES confirmation
+        // Hash the password before storing — never store plain text
+        let passwordHash = '';
+        if (session.plainPassword) {
+          try {
+            passwordHash = await bcrypt.hash(session.plainPassword, 10);
+          } catch (hashErr: any) {
+            console.warn('[WhatsApp Webhook] Password hashing failed:', hashErr.message);
+          }
+          // Clear plain-text password from session immediately after hashing
+          session.plainPassword = undefined;
+        }
+
         const userProfile = {
           uid: `wa_${from}`,
           fullName: session.fullName,
@@ -471,11 +567,12 @@ export async function handleWebhookEvent(req: Request, res: Response) {
           district: session.district || 'South West Delhi',
           role: 'Citizen',
           registrationSource: 'WhatsApp',
-          joinedDate: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+          joinedDate: new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
+          ...(passwordHash && { passwordHash })
         };
         try {
           await setDoc(doc(db, 'users', `wa_${from}`), userProfile);
-          console.log('[WhatsApp Webhook] Profile Saved:', `wa_${from}`);
+          console.log('[WhatsApp Webhook] Profile Saved with passwordHash:', `wa_${from}`);
         } catch (err: any) {
           console.warn('[WhatsApp Webhook] Profile save failed:', err.message);
         }

@@ -292,12 +292,24 @@ export function startFirebaseListener(io: any) {
       const newState = await calculateHotspots(true);
       io.emit('heatmap_update', newState);
 
-      // Real-time RAG Knowledge Base Vector Auto-Updates
+      // Real-time RAG Knowledge Base Vector Auto-Updates and Routing Triggers
       try {
         const { upsertVector } = require('./pineconeService');
+        const { runAutoRoutingPipeline } = require('./mlaRoutingService');
+
         snapshot.docChanges().forEach(async (change) => {
+          const data = change.doc.data();
+          
+          // Trigger Auto Routing Engine if new and not completed
+          if (change.type === 'added' && !data.routingPipelineCompleted) {
+            console.log(`[Heatmap Engine] New complaint detected. Triggering auto routing pipeline: ${change.doc.id}`);
+            // Run asynchronously so we don't block
+            runAutoRoutingPipeline(change.doc.id, data).catch((err: any) => {
+              console.error(`[Heatmap Engine] Failed to auto route complaint ${change.doc.id}:`, err.message);
+            });
+          }
+
           if (change.type === 'added' || change.type === 'modified') {
-            const data = change.doc.data();
             const textToEmbed = `Grievance ID: ${change.doc.id}\nCategory: ${data.category}\nPriority: ${data.priority}\nDistrict: ${data.district}\nStatus: ${data.status}\nDescription: ${data.description}`;
             await upsertVector(change.doc.id, textToEmbed, {
               type: 'complaint',
@@ -308,14 +320,39 @@ export function startFirebaseListener(io: any) {
           }
         });
       } catch (err: any) {
-        console.error('[Heatmap Engine] Pinecone real-time upsert failed:', err.message);
+        console.error('[Heatmap Engine] Pinecone/Routing real-time updates failed:', err.message);
       }
 
     }, (error) => {
       console.error("[Heatmap Engine] Firestore real-time listener error:", error.message);
     });
   } else {
-    console.log("[Heatmap Engine] Firestore Admin not initialized. Real-time Firestore listener bypassed.");
+    console.log("[Heatmap Engine] Firestore Admin not initialized. Falling back to Client SDK Firestore listener...");
+    try {
+      const { db: clientDb } = require('../../firebase');
+      const { collection: firestoreCollection, onSnapshot } = require('firebase/firestore');
+      const { runAutoRoutingPipeline } = require('./mlaRoutingService');
+
+      onSnapshot(firestoreCollection(clientDb, 'complaints'), async (snapshot: any) => {
+        console.log(`[Heatmap Engine] [Client SDK] Real-time Firestore update detected. Recalculating...`);
+        const newState = await calculateHotspots(true);
+        io.emit('heatmap_update', newState);
+
+        snapshot.docChanges().forEach(async (change: any) => {
+          const data = change.doc.data();
+          if (change.type === 'added' && !data.routingPipelineCompleted) {
+            console.log(`[Heatmap Engine] [Client SDK] New complaint detected: ${change.doc.id}`);
+            runAutoRoutingPipeline(change.doc.id, data).catch((err: any) => {
+              console.error(`[Heatmap Engine] [Client SDK] Failed to auto route complaint ${change.doc.id}:`, err.message);
+            });
+          }
+        });
+      }, (error: any) => {
+        console.error("[Heatmap Engine] [Client SDK] Firestore listener error:", error.message);
+      });
+    } catch (err: any) {
+      console.error("[Heatmap Engine] Failed to start Client SDK Firestore listener:", err.message);
+    }
   }
 }
 

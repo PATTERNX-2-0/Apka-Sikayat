@@ -5,6 +5,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import twilio from 'twilio';
+import bcrypt from 'bcryptjs';
 
 import { createAdapter } from '@socket.io/redis-adapter';
 import IORedis from 'ioredis';
@@ -16,7 +17,7 @@ import { initDatabase, logSMS, updateSMSStatus, getSMSLogs, getSMSStats, isPostg
 import { initRateLimiter, checkRateLimit } from './services/rateLimiter';
 import { initSMSQueue, getSMSQueue, isRedisConnected, closeRedis } from './services/bullmqService';
 import { maskPhoneNumber } from './services/cryptoService';
-import { isFirebaseAdminInitialized, adminDb } from './config/firebaseAdmin';
+import { isFirebaseAdminInitialized, adminDb, adminAuth } from './config/firebaseAdmin';
 import { validateGrievance } from './services/grievanceValidator';
 import { runEscalationCycle } from './services/escalationService';
 import { verifyWebhook, handleWebhookEvent } from './controllers/whatsappController';
@@ -30,7 +31,10 @@ import {
   getBriefingsArchive,
   handleBriefingGeneration,
   getAuditsDashboard,
-  getPolicyRecommendations
+  getPolicyRecommendations,
+  getMLAComplaints,
+  handleMLACopilotChat,
+  handleMLAVisitIntelligence
 } from './controllers/copilotController';
 
 // Load environment variables
@@ -57,6 +61,10 @@ const io = new Server(server, {
     credentials: true
   }
 });
+
+// Link io instance to VAPI Webhook controller for live dashboard updates
+const { setIoInstance } = require('./controllers/vapiWebhookController');
+setIoInstance(io);
 
 // Configure Socket.IO Redis Adapter for horizontal scaling if Redis is configured
 if (process.env.REDIS_HOST) {
@@ -86,7 +94,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 5002;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'a6522c015840d803becc2ebb49edc4a7';
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 
 // Real-time WebSockets logic
 io.on('connection', (socket) => {
@@ -313,6 +321,14 @@ app.post('/api/cm/copilot/briefings/generate', handleBriefingGeneration);
 app.get('/api/cm/copilot/audits', getAuditsDashboard);
 app.get('/api/cm/copilot/policies', getPolicyRecommendations);
 
+// MLA PORTAL API ENDPOINTS
+app.get('/api/mla/complaints', getMLAComplaints);
+app.post('/api/mla/copilot/chat', handleMLACopilotChat);
+app.post('/api/mla/copilot/visit', handleMLAVisitIntelligence);
+
+// VAPI VOICE AGENT API ENDPOINT
+app.post('/api/vapi/webhook', require('./controllers/vapiWebhookController').handleVapiWebhook);
+
 // 4. Internal Endpoint: Trigger Real-time broadcast (Called by worker)
 app.post('/api/internal/broadcast', (req, res) => {
   const { complaintId, status, currentStep, timeline, notes, trackingToken } = req.body;
@@ -513,6 +529,95 @@ app.get('/health', (req, res) => {
 app.get('/api/webhooks/whatsapp', verifyWebhook);
 app.post('/api/webhooks/whatsapp', handleWebhookEvent);
 
+// 8. Citizen Login (WhatsApp-registered citizens without Firebase Auth account)
+// Verifies email + password against Firestore passwordHash, returns a Firebase Custom Token
+app.post('/api/citizen-login', async (req: express.Request, res: express.Response) => {
+  const { email, password } = req.body || {};
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required.' });
+  }
+
+  try {
+    // Query Firestore for a user with matching email and WhatsApp registration source
+    let userDoc: any = null;
+    let userId: string | null = null;
+
+    if (adminDb) {
+      // Use Admin Firestore (most reliable)
+      const usersRef = adminDb.collection('users');
+      const snapshot = await usersRef.where('email', '==', email).limit(5).get();
+
+      for (const docSnap of snapshot.docs) {
+        const data = docSnap.data();
+        if (data.passwordHash) {
+          userDoc = data;
+          userId = docSnap.id;
+          break;
+        }
+      }
+    } else {
+      // Fallback: client-side Firestore (less reliable for server use, but works)
+      const { db: clientDb } = await import('./config/firebaseAdmin').then(m => ({ db: m.adminDb }));
+      if (clientDb) {
+        const snapshot = await clientDb.collection('users').where('email', '==', email).limit(5).get();
+        for (const docSnap of snapshot.docs) {
+          const data = docSnap.data();
+          if (data.passwordHash) {
+            userDoc = data;
+            userId = docSnap.id;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!userDoc || !userId) {
+      return res.status(401).json({ error: 'No WhatsApp-registered account found for this email.' });
+    }
+
+    // Verify bcrypt password
+    const isValid = await bcrypt.compare(password, userDoc.passwordHash);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    // Issue Firebase Custom Token so frontend can sign in with signInWithCustomToken()
+    if (adminAuth) {
+      try {
+        const customToken = await adminAuth.createCustomToken(userId, {
+          role: userDoc.role || 'Citizen',
+          registrationSource: 'WhatsApp'
+        });
+        return res.status(200).json({
+          customToken,
+          uid: userId,
+          role: userDoc.role || 'Citizen',
+          fullName: userDoc.fullName,
+          email: userDoc.email
+        });
+      } catch (tokenErr: any) {
+        console.error('[citizen-login] Failed to create custom token:', tokenErr.message);
+        // Fall through to simple session response if Firebase Admin isn't fully configured
+      }
+    }
+
+    // Fallback: return user info without custom token (frontend can handle partial login)
+    return res.status(200).json({
+      uid: userId,
+      role: userDoc.role || 'Citizen',
+      fullName: userDoc.fullName,
+      email: userDoc.email,
+      registrationSource: userDoc.registrationSource || 'WhatsApp',
+      noCustomToken: true
+    });
+
+  } catch (err: any) {
+    console.error('[citizen-login] Error:', err.message);
+    return res.status(500).json({ error: 'Internal server error during citizen login.' });
+  }
+});
+
 
 // Start Web Server
 server.listen(PORT, async () => {
@@ -524,6 +629,14 @@ server.listen(PORT, async () => {
   await initDatabase();
   await initRateLimiter();
   await initSMSQueue();
+
+  // Seed MLA Portal database collections
+  try {
+    const { seedMLAPortalData } = require('./services/seedService');
+    await seedMLAPortalData();
+  } catch (err: any) {
+    console.error('[API Server] Seeding failed:', err.message);
+  }
 
   // Start real-time Firestore listener for heatmap
   startFirebaseListener(io);

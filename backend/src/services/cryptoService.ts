@@ -5,7 +5,7 @@ import path from 'path';
 dotenv.config({ path: path.join(__dirname, '../../frontend/.env') });
 
 // Ensure we have a 32-byte key by hashing the configured env key
-const ENCRYPTION_KEY_RAW = process.env.SMS_ENCRYPTION_KEY || 'd7e8b61c47a9f0e34c2b9a8f6d7e8b61';
+const ENCRYPTION_KEY_RAW = process.env.SMS_ENCRYPTION_KEY || '';
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(ENCRYPTION_KEY_RAW).digest(); // Exactly 32 bytes
 const IV_LENGTH = 16; // AES block size
 

@@ -5,10 +5,16 @@ node_modules/
 .next/
 out/
 
+# Backend compilation
+backend/dist/
+
 # Environment variables
 .env
 .env.local
 .env.production
+.env.development
+*.env
+.env.*
 
 # Logs
 *.log

@@ -822,3 +822,188 @@ export async function getPolicyRecommendations(req: Request, res: Response) {
     return res.status(500).json({ error: 'Failed to fetch policy suggestions' });
   }
 }
+
+/**
+ * GET /api/mla/complaints
+ * Fetch complaints belonging to a specific MLA's constituency
+ */
+export async function getMLAComplaints(req: Request, res: Response) {
+  try {
+    const constituency = req.query.constituency as string;
+    if (!constituency) {
+      return res.status(400).json({ error: 'Constituency is required' });
+    }
+
+    const querySnap = await getDocs(collection(db, 'complaints'));
+    const complaints: any[] = [];
+    querySnap.forEach((doc) => {
+      const data = doc.data();
+      if (data.constituency === constituency || data.assignedMLAId === constituency) {
+        complaints.push({ id: doc.id, ...data });
+      }
+    });
+
+    return res.status(200).json(complaints);
+  } catch (error: any) {
+    console.error('[MLA Complaints API] Error:', error.message);
+    return res.status(500).json({ error: 'Failed to fetch constituency complaints' });
+  }
+}
+
+/**
+ * POST /api/mla/copilot/chat
+ * RAG-assisted Copilot for Assembly Constituencies (MLAs)
+ */
+export async function handleMLACopilotChat(req: Request, res: Response) {
+  const { query: userQuery, constituency } = req.body;
+  if (!userQuery || !constituency) {
+    return res.status(400).json({ error: 'Query and Constituency are required' });
+  }
+
+  try {
+    const queryLower = userQuery.toLowerCase();
+    
+    // Fetch live complaints for this constituency
+    const querySnap = await getDocs(collection(db, 'complaints'));
+    const constituencyComplaints: any[] = [];
+    querySnap.forEach((doc) => {
+      const data = doc.data();
+      if (data.constituency === constituency) {
+        constituencyComplaints.push({ id: doc.id, ...data });
+      }
+    });
+
+    const contextBlocks = constituencyComplaints.slice(0, 20).map((c, idx) => {
+      return `[Grievance ${idx + 1}]: ID: ${c.id}, Category: ${c.category || 'General'}, Status: ${c.status || 'Submitted'}, Priority: ${c.priority || 'Normal'}, Officer: ${c.assignedOfficer || 'Pending'}, Details: ${c.title || c.description || 'N/A'}`;
+    }).join('\n');
+
+    // Intent detection for report or speech generation
+    const isSpeech = queryLower.includes('speech') || queryLower.includes('address') || queryLower.includes('assembly');
+    const isBrief = queryLower.includes('brief') || queryLower.includes('report') || queryLower.includes('pdf');
+
+    if (isSpeech || isBrief) {
+      const docType = isSpeech ? 'Speech' : 'Constituency Brief';
+      const systemPrompt = `You are the AI Governance Copilot for a Member of Legislative Assembly (MLA) of Delhi representing "${constituency}".
+Draft a comprehensive, professional, and formal ${docType} for the MLA.
+Integrate specific real-time issues in this constituency to make the speech/brief highly relevant:
+${contextBlocks || 'No complaints registered in the constituency today.'}
+
+IMPORTANT: Provide clear paragraphs. Do NOT use markdown bold/italic asterisks or hashtags since they will render poorly in the PDF.`;
+
+      const generatedContent = await callGemini(systemPrompt, userQuery);
+
+      return res.status(200).json({
+        sender: 'ai',
+        text: generatedContent,
+        type: 'pdf_download',
+        data: {
+          title: `${constituency} - MLA ${docType}`,
+          filename: `MLA_${constituency.replace(/\s+/g, '_')}_${isSpeech ? 'Speech' : 'Brief'}`,
+          isExecutiveReport: false,
+          text: generatedContent
+        }
+      });
+    }
+
+    // Normal Q&A
+    const systemPrompt = `You are the AI Governance Assistant for the Member of Legislative Assembly (MLA) of "${constituency}".
+You have real-time access to the live complaints filed within your constituency.
+Generate clear, precise answers based ONLY on the data provided below. Do not make up facts or statistics.
+
+### Constituency Complaints Context:
+${contextBlocks || 'No complaints registered in this constituency yet.'}
+
+### Guidelines:
+- Highlight critical/emergency concerns (e.g. water, health, crime).
+- Mention slow officers or overloaded departments if queried.
+- Keep the tone helpful, professional, and government-focused.`;
+
+    const generatedContent = await callGemini(systemPrompt, userQuery);
+    return res.status(200).json({
+      sender: 'ai',
+      text: generatedContent,
+      type: 'text'
+    });
+
+  } catch (error: any) {
+    console.error('[MLA Copilot Chat] Error:', error.message);
+    return res.status(500).json({ error: 'Failed to complete Copilot request' });
+  }
+}
+
+/**
+ * POST /api/mla/copilot/visit
+ * MLA Visit Mode intelligence generator (Similar to CM Visit Mode)
+ */
+export async function handleMLAVisitIntelligence(req: Request, res: Response) {
+  const { areaName, constituency } = req.body;
+  if (!areaName || !constituency) {
+    return res.status(400).json({ error: 'Area/Village Name and Constituency are required' });
+  }
+
+  try {
+    const querySnap = await getDocs(collection(db, 'complaints'));
+    const areaComplaints: any[] = [];
+    querySnap.forEach((doc) => {
+      const data = doc.data();
+      const matchConstituency = data.constituency === constituency;
+      const matchArea = (data.location?.address || data.description || '').toLowerCase().includes(areaName.toLowerCase());
+      if (matchConstituency && matchArea) {
+        areaComplaints.push({ id: doc.id, ...data });
+      }
+    });
+
+    const total = areaComplaints.length;
+    const resolved = areaComplaints.filter(c => ['Resolved', 'Closed', 'Citizen_Verified'].includes(c.status)).length;
+    const pending = total - resolved;
+    const critical = areaComplaints.filter(c => c.priority === 'CRITICAL' || c.priority === 'EMERGENCY').length;
+
+    // AI summary prompts
+    const contextText = areaComplaints.map(c => `ID: ${c.id}, Category: ${c.category}, Priority: ${c.priority}, Status: ${c.status}, Desc: ${c.description || c.title}`).join('\n');
+    
+    const systemPrompt = `You are the AI Governance Inspector preparing a Constituency Visit briefing for the MLA.
+The MLA is visiting "${areaName}" in the "${constituency}" constituency.
+Produce a structured JSON report mapping localized problems, resolved issues, alerts, and officer status.
+Respond ONLY in JSON matching this format:
+{
+  "summary": "High level overview of issues in this area.",
+  "resolvedText": "Summary of what has been successfully resolved.",
+  "pendingText": "Summary of active grievances that need immediate attention.",
+  "criticalAlerts": "Critical warnings, public safety risks, or officer negligence alerts.",
+  "officerStatus": "Performance of officers assigned to this area.",
+  "citizenSatisfaction": "Analysis of citizen feedback ratings in this locality.",
+  "infrastructureStatus": "Status of roads, water, electricity grids in this locality."
+}`;
+
+    const rawJson = await callGemini(systemPrompt, `Analyze issues for visit to area: ${areaName}\nContext Data:\n${contextText || 'No grievances registered in this area.'}`);
+    
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(rawJson);
+    } catch {
+      parsed = {
+        summary: `No complaints found or AI parsing failed for ${areaName}.`,
+        resolvedText: "Operations normal.",
+        pendingText: "No pending issues.",
+        criticalAlerts: "No alerts active.",
+        officerStatus: "Officers performing within target limits.",
+        citizenSatisfaction: "N/A",
+        infrastructureStatus: "Stable."
+      };
+    }
+
+    return res.status(200).json({
+      areaName,
+      constituency,
+      totalCount: total,
+      resolvedCount: resolved,
+      pendingCount: pending,
+      criticalCount: critical,
+      ...parsed
+    });
+
+  } catch (error: any) {
+    console.error('[MLA Visit intelligence] Error:', error.message);
+    return res.status(500).json({ error: 'Failed to generate visit briefing' });
+  }
+}
